@@ -78,6 +78,25 @@
   }
   /* The TeamCamel logo: shapes only (lettering traced from PT Sans), so it needs no font. */
   .logo { height: 14.4px; width: auto; fill: var(--ink); vertical-align: baseline; margin-right: 1px; }
+
+  /* Opened as a file (double-clicked) instead of at TeamCamel's address: the setup guide. */
+  .guide { display: block; max-width: 780px; }
+  .guide h1 { font-size: 24px; font-weight: 900; margin: 0 0 4px; }
+  .guide h2 { font-size: 18px; font-weight: 700; margin: 26px 0 8px; }
+  .guide p { margin: 0 0 8px; }
+  .guide .lead, .guide .note { color: var(--muted); font-weight: 300; }
+  .guide .state { font-weight: 500; margin: 14px 0 0; }
+  .guide .no, .guide .warn b { color: var(--attn); }
+  .guide .open, .guide .open a, .guide .state a { color: var(--work); }
+  .guide .warn { border-left: 3px solid var(--attn); padding: 2px 0 2px 10px; }
+  .guide .warn b { font-weight: 500; }
+  .guide .where { overflow-wrap: anywhere; }
+  .cmd { display: flex; gap: 8px; align-items: center; margin: 6px 0 10px; }
+  .cmd code { flex: 1; min-width: 0; background: #fff; border: 1px solid var(--rule); border-radius: 4px; padding: 6px 10px;
+              font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
+  .cmd button { font: inherit; font-size: 14px; background: none; border: 1px solid var(--muted); border-radius: 4px;
+                padding: 4px 12px; color: var(--ink); cursor: pointer; white-space: nowrap; }
+  .cmd button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -297,11 +316,183 @@ function schedule() {
   timer = setTimeout(async () => { await refresh(); schedule(); }, pollMs);
 }
 
-document.addEventListener('visibilitychange', async () => {
-  if (!document.hidden) await refresh();
-  schedule();
-});
-refresh().then(schedule);
+// ---- Opened as a file -------------------------------------------------------------------------
+// A double-clicked index.html has no TeamCamel behind it, so it shows how to set TeamCamel up for
+// the folder it sits in, and notices when TeamCamel starts running on this computer.
+
+// Words in a folder's path that mean it syncs between computers (SYNC_NAMES in teamcamel.py).
+const SYNCED = [['dropbox', 'Dropbox'], ['onedrive', 'OneDrive'], ['icloud', 'iCloud Drive'],
+  ['mobile documents', 'iCloud Drive'], ['google drive', 'Google Drive'], ['googledrive', 'Google Drive'],
+  ['my drive', 'Google Drive'], ['syncthing', 'Syncthing'], ['nextcloud', 'Nextcloud'], ['pcloud', 'pCloud'],
+  ['cloudstorage', 'a synced folder']];
+
+function osOf(nav) {
+  const p = ((nav.userAgentData && nav.userAgentData.platform) || nav.platform || nav.userAgent || '').toLowerCase();
+  return p.includes('mac') || p.includes('darwin') ? 'macos' : p.includes('win') ? 'windows' : 'linux';
+}
+
+// The TeamCamel folder, from this file's own address (.../TeamCamel/web/index.html); null if the
+// file is not in a web folder.
+function folderOf(loc, os) {
+  let p;
+  try { p = decodeURIComponent(loc.pathname); } catch (e) { return null; }
+  const m = p.match(/^(.*)\/web\/[^\/]*$/);
+  if (!m || !m[1]) return null;
+  p = m[1];
+  if (os !== 'windows') return loc.host ? '//' + loc.host + p : p;
+  p = p.replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, '\\');
+  return loc.host ? '\\\\' + loc.host + p : p;     // a network share: file://server/share/...
+}
+
+function syncedIn(folder) {
+  const f = (folder || '').toLowerCase();
+  const hit = SYNCED.find(([word]) => f.includes(word));
+  return hit ? hit[1] : null;
+}
+
+const shq = s => "'" + s.replace(/'/g, "'\\''") + "'";      // one shell word, whatever the path holds
+
+// The check and install commands for this computer and folder.
+function commands(os, folder) {
+  if (os === 'windows') {
+    const cd = folder ? 'cd /d "' + folder + '" && ' : '';
+    return { check: null, install: cd + 'python teamcamel.py --install-hook' };
+  }
+  const cd = folder ? 'cd ' + shq(folder) + ' && ' : '';
+  return { check: cd + 'sh precheck.sh', install: cd + 'python3 teamcamel.py --install-hook' };
+}
+
+function guideAddress() {
+  const port = Number(new URLSearchParams(location.search).get('port')) || 2263;
+  return 'http://127.0.0.1:' + port + '/';
+}
+
+// Whether TeamCamel answers on this computer. The answer itself stays unreadable to a file page;
+// only whether anything answered is known.
+async function answering(address) {
+  try { await fetch(address + 'api/state', { mode: 'no-cors', cache: 'no-store' }); return true; }
+  catch (e) { return false; }
+}
+
+async function copyText(text, button) {
+  let done = false;
+  try { await navigator.clipboard.writeText(text); done = true; } catch (e) {}
+  if (!done) {
+    const t = el('textarea'); t.value = text; document.body.append(t); t.select();
+    try { done = document.execCommand('copy'); } catch (e) {}
+    t.remove();
+  }
+  button.textContent = done ? 'Copied' : 'Select it and copy';
+  setTimeout(() => { button.textContent = 'Copy'; }, 2500);
+}
+
+function cmdEl(text) {
+  const box = el('div', 'cmd'), code = el('code', '', text), button = el('button', '', 'Copy');
+  button.type = 'button';
+  button.addEventListener('click', () => copyText(text, button));
+  box.append(code, button);
+  return box;
+}
+
+function link(address) {
+  const a = el('a', '', address);
+  a.href = address;
+  return a;
+}
+
+function guide() {
+  const os = osOf(navigator), folder = folderOf(location, os), address = guideAddress();
+  const cmds = commands(os, folder), synced = syncedIn(folder);
+  const enter = os === 'macos' ? 'Return' : 'Enter';
+  document.title = 'Set up TeamCamel';
+  document.getElementById('bar').hidden = true;
+  const g = el('div', 'guide'), main = document.getElementById('nodes');
+  main.className = '';
+  main.replaceChildren(g);
+
+  g.append(el('h1', '', 'Set up TeamCamel'),
+           el('p', 'lead', 'This page was opened as a file. Once TeamCamel is set up, it shows your sessions at its own address.'));
+  const state = el('p', 'state', 'Checking whether TeamCamel runs on this computer…');
+  g.append(state);
+
+  g.append(el('h2', '', '1. Put the folder where it will stay'));
+  if (folder) {
+    const shown = os === 'windows' ? folder : folder.replace(/^\/(Users|home)\/[^\/]+/, '~');
+    g.append(el('p', 'where', 'This folder: ' + shown));
+  } else {
+    g.append(el('p', 'warn', 'Open this file from the web folder inside the TeamCamel folder; the commands below then come with the folder filled in.'));
+  }
+  if (synced) {
+    g.append(el('p', '', 'It is in ' + synced + '. Every computer that sets up TeamCamel from this same folder appears on the page.'));
+  } else if (folder) {
+    const w = el('p', 'warn');
+    w.append(el('b', '', 'Only this computer will show from here. '),
+             'To see several computers on one page, first move the TeamCamel folder into a folder that syncs between them ' +
+             '(Dropbox, iCloud Drive, OneDrive or Google Drive), use that same folder on every computer, and open ' +
+             'web/index.html again from its new place.');
+    g.append(w);
+    if (/[\/\\]downloads[\/\\]/i.test(folder + '\\')) {
+      g.append(el('p', 'note', 'For one computer, your home folder is a better place than Downloads, which is often cleared out.'));
+    }
+  }
+
+  g.append(el('h2', '', '2. Check that everything is there'));
+  if (os === 'windows') {
+    g.append(el('p', '', 'Double-click precheck.bat in the TeamCamel folder.'));
+  } else {
+    g.append(el('p', '', os === 'macos'
+      ? 'Open Terminal (press Cmd + Space, type Terminal, press Return). Paste this and press Return:'
+      : 'Open a terminal, paste this and press Enter:'));
+    g.append(cmdEl(cmds.check));
+  }
+  g.append(el('p', 'note', 'Every line should say OK; anything MISSING comes with what to do about it. The check changes nothing.'));
+
+  g.append(el('h2', '', '3. Install, once on each computer'));
+  g.append(el('p', '', os === 'windows'
+    ? 'Open Command Prompt (press the Windows key, type cmd, press Enter). Paste this and press Enter:'
+    : 'Paste this and press ' + enter + ':'));
+  g.append(cmdEl(cmds.install));
+  if (os === 'windows') g.append(el('p', 'note', 'If it says python is not found, change python to py and try again.'));
+  g.append(el('p', 'note', 'This adds one start-up line to Claude’s settings file, after saving a backup of it, so that ' +
+                           'TeamCamel starts with every Claude session. It also starts TeamCamel now.'));
+
+  g.append(el('h2', '', '4. Open your page'));
+  const open = el('p', 'open');
+  g.append(open);
+  g.append(el('p', 'note', 'Another computer: do steps 2 and 3 there too, from the same synced folder. ' +
+                           'Each computer then appears on every computer’s page.'));
+
+  let timer = null, isUp = false;
+  const waiting = () => {
+    open.replaceChildren('Waiting for TeamCamel to start… Already set up? Open ', link(address));
+  };
+  const up = () => {
+    isUp = true;
+    state.className = 'state';
+    state.replaceChildren('TeamCamel is running on this computer: ', link(address));
+    open.replaceChildren('Running. Open your page and bookmark it: ', link(address));
+  };
+  const check = async () => {
+    clearTimeout(timer);
+    if (await answering(address)) { up(); return; }
+    state.className = 'state no';
+    state.textContent = 'TeamCamel is not running on this computer yet. Three steps, a few minutes.';
+    if (!document.hidden) timer = setTimeout(check, 3000);   // until it starts; not while the tab is hidden
+  };
+  waiting();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !isUp) check(); });
+  check();
+}
+
+if (location.protocol === 'file:') {
+  guide();
+} else {
+  document.addEventListener('visibilitychange', async () => {
+    if (!document.hidden) await refresh();
+    schedule();
+  });
+  refresh().then(schedule);
+}
 </script>
 </body>
 </html>

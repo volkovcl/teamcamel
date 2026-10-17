@@ -4,6 +4,31 @@ TeamCamel change log
 Newest version first.
 
 
+Version 1.8 - 2026-10-16
+------------------------
+
+New
+- Setup guide. Double-clicking web/index.html, instead of opening
+  TeamCamel's address, now shows how to set TeamCamel up: where to keep the
+  folder, then the check and install commands for that very folder, ready to
+  copy. It warns when the folder is not in a synced folder (then only this
+  computer will show), says whether TeamCamel already runs on this computer,
+  and turns into a link to the page as soon as TeamCamel starts. Before, the
+  page only said that TeamCamel was not answering.
+
+Changed
+- README: how to see several computers on one page is now part of the first
+  setup step instead of a line near the end.
+
+The program itself works as in 1.7.
+
+Tested
+- The guide in Chrome on macOS: with TeamCamel stopped, running, and starting
+  while the guide was open. The commands it writes for macOS, Linux and
+  Windows folders, by automated checks. Not tested: Safari, Firefox, and the
+  guide on Windows.
+
+
 Version 1.7 - 2026-10-11
 ------------------------
 

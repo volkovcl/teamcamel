@@ -81,7 +81,7 @@ try:
 except ImportError:   # a Python built without it: Codex threads are then read from their files
     sqlite3 = None
 
-__version__ = "1.7"
+__version__ = "1.8"
 
 WINDOWS = sys.platform.startswith("win")
 MACOS = sys.platform == "darwin"

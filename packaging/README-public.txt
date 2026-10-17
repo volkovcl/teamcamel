@@ -17,8 +17,16 @@ YOU NEED
 
 SET UP
 
+The easy way: double-click web/index.html inside the TeamCamel folder. It
+shows these steps in your browser, with the commands for your folder ready to
+copy, and tells you when TeamCamel is running.
+
 1. Unzip, and put the TeamCamel folder where it can stay, for example in your
    home folder. Keep its files together.
+   To see several computers on one page, put it instead inside a folder that
+   syncs between them (Dropbox, iCloud Drive, OneDrive, Google Drive), use
+   that same folder on every computer, and do steps 2 and 3 on each. Each
+   computer then shows all of them.
 
 2. Precheck. It changes nothing and tells you if anything is missing.
 
@@ -76,10 +84,6 @@ Windows).
     python3 teamcamel.py --stop        stop it until the next Claude session
     python3 teamcamel.py --uninstall   take it out of Claude's start-up and
                                        stop it; then delete the TeamCamel folder
-
-More than one computer: keep the TeamCamel folder inside a folder that syncs
-between them (Dropbox, OneDrive, iCloud Drive) and do step 3 on each. Every
-computer's page then shows all of them.
 
 
 

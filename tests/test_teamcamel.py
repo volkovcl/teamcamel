@@ -465,6 +465,12 @@ try:
     ok("bothApps" in html and "'Open in ' + app" in html, "page labels sessions when both kinds are present, and links by app")
     ok(html.count('<span id="credit">') == 1 and '<span id="ver"></span>' in html,
        "footer has the copyright line in its own element (a tester package leaves it out) and the version")
+    ok("location.protocol === 'file:'" in html and "function guide()" in html,
+       "a page opened as a file shows the setup guide instead of asking TeamCamel for sessions")
+    ok(all("['%s'," % name in html for name in tc.SYNC_NAMES),
+       "the setup guide knows the same synced-folder names as the precheck")
+    ok("sh precheck.sh" in html and "precheck.bat" in html and "python3 teamcamel.py --install-hook" in html,
+       "the setup guide gives the README's check and install commands")
 
     print("other nodes' files")
     restore()

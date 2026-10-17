@@ -27,7 +27,8 @@ carries a small "Claude" or "Codex" label.
 ## Install
 
 1. Download the zip from the [latest release](../../releases/latest) and unzip it. Put the `TeamCamel` folder
-   where it can stay.
+   where it can stay. To see several computers on one page, put it inside a folder that syncs between them
+   (see [Several computers](#several-computers)).
 2. Run the precheck. It changes nothing and tells you if anything is missing.
    - macOS / Linux: in a terminal, inside the folder: `sh precheck.sh`
    - Windows: double-click `precheck.bat`
@@ -36,7 +37,9 @@ carries a small "Claude" or "Codex" label.
    with every Claude session.
 4. Open <http://127.0.0.1:2263/> and bookmark it.
 
-`README.txt` in the zip has the same steps in more detail.
+Or double-click `web/index.html` in the folder: it shows these steps in your browser, with the commands for your
+folder ready to copy, and tells you when TeamCamel is running. `README.txt` in the zip has the same steps in more
+detail.
 
 ## Several computers
 

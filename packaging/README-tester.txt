@@ -17,8 +17,16 @@ YOU NEED
 
 SET UP
 
+The easy way: double-click web/index.html inside the TeamCamel folder. It
+shows these steps in your browser, with the commands for your folder ready to
+copy, and tells you when TeamCamel is running.
+
 1. Unzip, and put the TeamCamel folder where it can stay, for example in your
    home folder. Keep its files together.
+   To see several computers on one page, put it instead inside a folder that
+   syncs between them (Dropbox, iCloud Drive, OneDrive, Google Drive), use
+   that same folder on every computer, and do steps 2 and 3 on each. Each
+   computer then shows all of them.
 
 2. Precheck. It changes nothing and tells you if anything is missing.
 
@@ -76,17 +84,15 @@ Windows).
     python3 teamcamel.py --uninstall   take it out of Claude's start-up and
                                        stop it; then delete the TeamCamel folder
 
-More than one computer: keep the TeamCamel folder inside a folder that syncs
-between them (Dropbox, OneDrive, iCloud Drive) and do step 3 on each. Every
-computer's page then shows all of them.
-
 
 TESTING NOTES
 
 - It runs daily on macOS and has been run on Linux. On Windows nobody has run
   it yet: if you are on Windows, you are the first.
-- Codex sessions are new in this version. If you use Codex, please check
-  that what the page says about a Codex session matches what Codex shows.
+- New in this version: double-clicking web/index.html shows the setup
+  steps. If you set up from there, please say whether they worked as shown.
+- If you use Codex, please check that what the page says about a Codex
+  session matches what Codex shows.
 - If something goes wrong or looks odd, please send back what the precheck
   prints and what "--check" prints. Both list counts and folder names only,
   never the names or contents of your sessions.
