@@ -1,0 +1,11 @@
+# each computer's own sessions: never publish
+state/
+# built packages, working material and local settings
+dist/
+inputs/
+.claude/
+packaging/private-words.txt
+packaging/HOW-TO-PUBLISH.md
+packaging/HOW-TO-PUBLISH.template.md
+__pycache__/
+.DS_Store
