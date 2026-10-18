@@ -11,6 +11,8 @@ carries a small "Claude" or "Codex" label.
 
 - **Awaits input** and **interrupted** sessions come first, in red. **Working** sessions are blue. **Completed**
   ones follow, most recent first; older ones fold away under ". . .".
+- A session whose turn is over while work it started still runs shows as **working in background**: a command or
+  helper agent Claude sent to the background, or a busy program the session started, such as a render.
 - The count of sessions needing you is next to each computer's name and at the front of the browser tab's title.
 - Click a session's name to open it in Claude or in the Codex app.
 - Several computers on one page: the left column is the computer you are at, the right one shows the others.

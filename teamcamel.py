@@ -72,7 +72,7 @@ import sys
 import threading
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -81,7 +81,7 @@ try:
 except ImportError:   # a Python built without it: Codex threads are then read from their files
     sqlite3 = None
 
-__version__ = "1.8"
+__version__ = "1.9"
 
 WINDOWS = sys.platform.startswith("win")
 MACOS = sys.platform == "darwin"
@@ -712,9 +712,205 @@ def codex_sessions():
     return sessions
 
 
+# --- work still running behind a finished turn ---------------------------------
+#
+# Claude reports a session idle as soon as its turn ends, even while work it started goes on:
+# a command or a helper agent sent to the background, or a program that detached (a render).
+# Two signals tell that work apart from a finished session:
+#   - the transcript records each background command and helper agent when it starts, and the
+#     notice Claude receives when it ends;
+#   - every command a session runs carries CLAUDE_PID and CLAUDE_CODE_SESSION_ID in its
+#     environment, and so does any program it starts, even one that detaches.
+# Such a program counts only while it is busy, so an idle leftover (a helper service) does not.
+
+BUSY_CPU = 10.0                # % of one core above which a program a session started counts as working
+AGENT_HOURS = 12               # a background helper agent with no end notice stops counting after this
+
+_ENV_PID = re.compile(r"(?:^|\s)CLAUDE_PID=(\d+)(?=\s|$)")
+_ENV_SESSION = re.compile(r"(?:^|\s)CLAUDE_CODE_SESSION_ID=([0-9A-Za-z-]+)(?=\s|$)")
+_TASK_ID = re.compile(r"<task-id>([^<]+)</task-id>")
+_TASK_STATUS = re.compile(r"<status>([^<]+)</status>")
+_task_cache = {}
+
+
+def process_table():
+    """[(pid, ppid, text)] for this user's processes, text being the command line followed by the
+    environment where the system shows it (macOS hides it for its own programs, such as /bin/zsh).
+    None where processes cannot be read."""
+    if WINDOWS:
+        return None
+    rows = []
+    if MACOS or not Path("/proc").is_dir():
+        try:
+            out = subprocess.run(["ps", "-Eww", "-U", str(os.getuid()), "-o", "pid=,ppid=,command="],
+                                 capture_output=True, text=True, errors="replace", timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        for line in out.splitlines():
+            parts = line.split(None, 2)
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                rows.append((int(parts[0]), int(parts[1]), parts[2]))
+        return rows
+    uid = os.getuid()
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            if d.stat().st_uid != uid:
+                continue
+            ppid = int((d / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            words = (d / "cmdline").read_bytes().split(b"\0") + (d / "environ").read_bytes().split(b"\0")
+        except (OSError, ValueError, IndexError):
+            continue
+        rows.append((int(d.name), ppid, " ".join(w.decode("utf-8", "replace") for w in words if w)))
+    return rows
+
+
+def marked_processes(table):
+    """Programs started by Claude sessions' commands, running now:
+    [{"pid", "claude", "session", "cpu", "program", "since"}]."""
+    me = os.getpid()
+    marks = {}
+    for pid, ppid, text in table or []:
+        pid_m = _ENV_PID.search(text)
+        # Not TeamCamel itself: when a Claude hook started it, it carries the marks too.
+        if pid_m and pid != me and ppid != me:
+            sess_m = _ENV_SESSION.search(text)
+            marks[pid] = (int(pid_m.group(1)), sess_m.group(1) if sess_m else None)
+    if not marks:
+        return []
+    try:
+        out = subprocess.run(["ps", "-o", "pid=,pcpu=,lstart=,comm=", "-p", ",".join(str(p) for p in marks)],
+                             capture_output=True, text=True, errors="replace", timeout=10,
+                             env=dict(os.environ, LC_ALL="C", TZ="UTC")).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for line in out.splitlines():
+        parts = line.split(None, 7)
+        if len(parts) < 8 or not parts[0].isdigit() or int(parts[0]) not in marks:
+            continue
+        try:
+            cpu = float(parts[1])
+            since = int(datetime.strptime(" ".join(parts[2:7]), "%a %b %d %H:%M:%S %Y")
+                        .replace(tzinfo=timezone.utc).timestamp() * 1000)
+        except ValueError:
+            continue
+        claude, session = marks[int(parts[0])]
+        found.append({"pid": int(parts[0]), "claude": claude, "session": session, "cpu": cpu,
+                      "program": os.path.basename(parts[7].strip()) or "program", "since": since})
+    return found
+
+
+def open_tasks(cli_id, since_ms):
+    """[(kind, start_ms)] for the background commands and helper agents of a session that started
+    after since_ms (the running process's start) and have no end notice yet, read from its
+    transcript. Only new lines are read each time."""
+    path = transcript_path(cli_id)
+    if not path:
+        return []
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    cache = _task_cache.get(path)
+    if not cache or size < cache["offset"]:
+        cache = _task_cache[path] = {"offset": 0, "open": {}}
+    if size > cache["offset"]:
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(cache["offset"])
+                chunk = fh.read(size - cache["offset"])
+        except OSError:
+            return []
+        end = chunk.rfind(b"\n")
+        if end >= 0:
+            cache["offset"] += end + 1
+            for raw in chunk[:end].split(b"\n"):
+                _task_record(raw, cache["open"])
+    now = now_ms()
+    out = []
+    for kind, start in cache["open"].values():
+        if since_ms and start and start < since_ms - 1000:
+            continue        # started by an earlier run of the session, and ended with it
+        if kind == "agent" and start and now - start > AGENT_HOURS * 3600 * 1000:
+            continue
+        out.append((kind, start))
+    return out
+
+
+def _task_record(raw, tasks):
+    """Note one transcript line's background start or end in tasks {id: (kind, start_ms)}."""
+    if not (b"backgroundTaskId" in raw or b"async_launched" in raw or b'"task_id"' in raw
+            or b"<task-notification>" in raw):
+        return
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        return
+    result = d.get("toolUseResult")
+    if isinstance(result, dict):
+        if result.get("backgroundTaskId"):
+            tasks[str(result["backgroundTaskId"])] = ("command", record_ms(d))
+        elif result.get("status") == "async_launched" and result.get("agentId"):
+            tasks[str(result["agentId"])] = ("agent", record_ms(d))
+        elif result.get("task_id") and "stopped" in str(result.get("message", "")).lower():
+            tasks.pop(str(result["task_id"]), None)          # stopped on purpose
+    if d.get("type") == "queue-operation":
+        text = d.get("content")
+    elif d.get("type") == "attachment":
+        text = (d.get("attachment") or {}).get("prompt")
+    else:
+        text = (d.get("message") or {}).get("content") if d.get("type") == "user" else None
+    if isinstance(text, str) and text.lstrip().startswith("<task-notification>"):
+        tid, status = _TASK_ID.search(text), _TASK_STATUS.search(text)
+        if tid and status and status.group(1).strip() in ("completed", "failed", "killed"):
+            tasks.pop(tid.group(1).strip(), None)
+
+
+def background_work(registry):
+    """{Claude session id: (detail, since_ms)} for sessions with work still running."""
+    table = process_table()
+    procs = marked_processes(table)
+    by_pid = {e["pid"]: e for e in registry}
+    labels, first = {}, {}
+
+    def add(sid, label, since):
+        labels.setdefault(sid, []).append(label)
+        if since and (sid not in first or since < first[sid]):
+            first[sid] = since
+
+    for p in procs or []:
+        if p["cpu"] >= BUSY_CPU:
+            sid = (by_pid.get(p["claude"]) or {}).get("sessionId") or p["session"]
+            if sid:
+                add(sid, p["program"], p["since"])
+    # A command Claude runs goes through a shell started from its shell snapshot.
+    shells = {ppid for _, ppid, text in table or [] if "shell-snapshots" in text}
+    for e in registry:
+        if e.get("status") in ("busy", "waiting") or not e.get("sessionId"):
+            continue
+        for kind, start in open_tasks(e["sessionId"], _as_int(e.get("startedAt"))):
+            if kind == "command" and table is not None and e["pid"] not in shells:
+                continue    # no shell of this session is left: the command is over, notice or not
+            add(e["sessionId"], kind, start)
+    return {sid: (work_detail(found), first.get(sid)) for sid, found in labels.items()}
+
+
+def work_detail(labels):
+    """'in background (blender)', 'in background (2 agents, command)': what is still running."""
+    programs = sorted({l for l in labels if l not in ("command", "agent")})
+    words = list(programs)
+    for kind in ("agent", "command"):
+        n = labels.count(kind)
+        if n and not (kind == "command" and programs):   # a busy program is the command's own work
+            words.append(kind if n == 1 else "%d %ss" % (n, kind))
+    return "in background (%s)" % ", ".join(words)
+
+
 # --- snapshot ----------------------------------------------------------------
 
-def classify(live, cli_id, last_activity):
+def classify(live, cli_id, last_activity, background=None):
     """state / detail / since / attention for one session."""
     status = (live or {}).get("status")
     if status == "waiting":
@@ -723,9 +919,13 @@ def classify(live, cli_id, last_activity):
         return "working", "", live.get("statusUpdatedAt"), False
     verdict = transcript_verdict(cli_id)
     if not verdict:
-        return "completed", "", (live or {}).get("statusUpdatedAt") or last_activity, False
-    state, detail, since = verdict
-    since = since or last_activity
+        state, detail, since = "completed", "", (live or {}).get("statusUpdatedAt") or last_activity
+    else:
+        state, detail, since = verdict
+        since = since or last_activity
+    if state == "completed" and background and cli_id in background:
+        detail, since_work = background[cli_id]
+        return "working", detail, since_work or since, False
     attention = False
     if state == "interrupted":
         recent = since and now_ms() - since < INTERRUPTED_ATTENTION_DAYS * 86400 * 1000
@@ -738,6 +938,11 @@ def collect():
     by_host = {e["hostSessionId"]: e for e in registry if e.get("hostSessionId")}
     by_cli = {e["sessionId"]: e for e in registry if e.get("sessionId")}
     sessions, matched = [], set()
+    try:
+        background = background_work(registry)
+    except Exception as err:   # never lose the session list over it
+        print("teamcamel: background work not read: %r" % err, file=sys.stderr)
+        background = {}
 
     for d in desktop_sessions():
         if d.get("isArchived") or not d.get("sessionId"):
@@ -746,7 +951,7 @@ def collect():
         if live:
             matched.add(live["pid"])
         cwd = d.get("originCwd") or d.get("cwd") or (live or {}).get("cwd")
-        state, detail, since, attention = classify(live, d.get("cliSessionId"), d.get("lastActivityAt"))
+        state, detail, since, attention = classify(live, d.get("cliSessionId"), d.get("lastActivityAt"), background)
         sessions.append({
             "id": d["sessionId"],
             "title": d.get("title") or (live or {}).get("name") or "(untitled)",
@@ -763,7 +968,7 @@ def collect():
     for e in registry:
         if e["pid"] in matched:
             continue
-        state, detail, since, attention = classify(e, e.get("sessionId"), e.get("updatedAt"))
+        state, detail, since, attention = classify(e, e.get("sessionId"), e.get("updatedAt"), background)
         sessions.append({
             "id": e.get("sessionId") or "pid-%d" % e["pid"],
             "title": e.get("name") or "(terminal session)",

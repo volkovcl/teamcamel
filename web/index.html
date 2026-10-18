@@ -136,7 +136,7 @@ function statusText(s, now) {
     const what = s.detail && s.detail !== 'input needed' ? ' (' + s.detail + ')' : '';   // e.g. permission prompt, approval
     return 'awaits input' + what + (t ? '  · ' + t : '');
   }
-  if (s.state === 'working') return 'working' + (t ? '  · ' + t : '');
+  if (s.state === 'working') return 'working' + (s.detail ? ' ' + s.detail : '') + (t ? '  · ' + t : '');   // e.g. in background (blender)
   if (s.state === 'interrupted') return (s.detail || 'interrupted') + (t ? '  · ' + t + ' ago' : '');
   return 'completed' + (t ? '  · ' + t + ' ago' : '');
 }

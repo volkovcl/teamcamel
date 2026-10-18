@@ -64,6 +64,10 @@ READING THE PAGE
 
 - Red: the session awaits your input, or was interrupted. Blue: working.
   Gray: completed.
+- "Working in background" means Claude's turn is over but work it started
+  still runs: a command or a helper agent sent to the background, or a
+  program the session started that is still busy, such as a render. It turns
+  to completed when that work ends.
 - The number after your computer's name counts the sessions that need you. It
   also shows at the front of the browser tab's title.
 - ". . ." unfolds the older sessions of a workspace. A workspace ("ws") is

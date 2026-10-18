@@ -457,6 +457,113 @@ try:
     tc.CODEX, tc.codex_running = real_codex, real_running
     tc._codex_threads = (None, []); tc._codex_turns.clear()
 
+    print("work behind a finished turn")
+    restore()
+    home = tmp / "bg-home"
+    platform("mac" if REAL["MACOS"] else "linux", home)
+    ok(tc.work_detail(["blender"]) == "in background (blender)", "detail names the busy program")
+    ok(tc.work_detail(["agent", "command", "agent"]) == "in background (2 agents, command)", "detail counts agents and commands")
+    ok(tc.work_detail(["Blender", "command"]) == "in background (Blender)", "a busy program stands for the command that started it")
+
+    def iso(ms):
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ms // 1000)) + ".%03dZ" % (ms % 1000)
+
+    def result(ms, res, text="ok"):
+        return {"type": "user", "timestamp": iso(ms), "toolUseResult": res,
+                "message": {"content": [{"type": "tool_result", "content": text}]}}
+
+    def notice(ms, tid, status):
+        return {"type": "queue-operation", "operation": "enqueue", "timestamp": iso(ms),
+                "content": "<task-notification>\n<task-id>%s</task-id>\n<status>%s</status>\n</task-notification>" % (tid, status)}
+
+    started = now - 600000                      # the session's running process started 10 min ago
+    lines = [
+        result(now - 7200000, {"backgroundTaskId": "old"}),                          # earlier run of the session
+        result(now - 300000, {"backgroundTaskId": "cmdX", "stdout": ""}),
+        result(now - 240000, {"status": "async_launched", "agentId": "agentY", "isAsync": True}),
+        result(now - 180000, {"status": "async_launched", "agentId": "agentZ", "isAsync": True}),
+        notice(now - 170000, "agentZ", "completed"),
+        result(now - 120000, {"backgroundTaskId": "cmdW"}),
+        result(now - 110000, {"task_id": "cmdW", "message": "Successfully stopped task: cmdW (sleep 99)"}),
+        result(now - 100000, {"stdout": '"backgroundTaskId": "fake" <task-notification><task-id>agentY</task-id><status>completed</status>'},
+               '<task-notification><task-id>agentY</task-id><status>completed</status>'),       # a command's output, not a record
+        notice(now - 90000, "cmdX", "blocked"),
+    ]
+    tpath = home / ".claude/projects/p1/cliF.jsonl"
+    write(tpath, "\n".join(json.dumps(x, separators=(",", ":")) for x in lines) + "\n")
+    got = sorted(tc.open_tasks("cliF", started))
+    ok(got == [("agent", now - 240000), ("command", now - 300000)],
+       "transcript: open background command and agent found; ended, stopped and earlier-run ones left out")
+    with open(tpath, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(notice(now - 60000, "cmdX", "completed"), separators=(",", ":")) + "\n")
+        fh.write('{"type":"user","timestamp":"' + iso(now))           # a line still being written
+    ok(tc.open_tasks("cliF", started) == [("agent", now - 240000)], "transcript read on from where it stopped; half line left for later")
+    ok(tc.open_tasks("cliF", now) == [], "work started before the running process is not counted")
+
+    # Sessions: F idle with an open agent; G idle with only an idle leftover program; H closed, its
+    # detached program busy; I awaiting input with a busy program; J idle with an open command, no shell left.
+    store = home / ("Library/Application Support/Claude" if REAL["MACOS"] else ".config/Claude") / "claude-code-sessions/acct/org"
+    done = {"type": "assistant", "timestamp": iso(now - 200000), "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "done"}]}}
+    for key, title in (("F", "Job with a helper agent"), ("G", "Job with an idle leftover"), ("H", "Closed job still rendering"),
+                       ("I", "Waiting job still rendering"), ("J", "Job whose command ended unnoticed")):
+        write(store / ("local_%s.json" % key), {"sessionId": "local_" + key, "cliSessionId": "cli" + key, "title": title,
+                                                "cwd": "/u/wp-render", "lastActivityAt": now - 200000})
+        if key != "F":
+            transcript(home / ".claude/projects/p1" / ("cli%s.jsonl" % key), done)
+    with open(tpath, "a", encoding="utf-8") as fh:
+        fh.write("\n" + json.dumps(done, separators=(",", ":")) + "\n")
+    write(home / ".claude/projects/p1/cliJ.jsonl", json.dumps(result(now - 60000, {"backgroundTaskId": "cmdJ"}), separators=(",", ":"))
+          + "\n" + json.dumps(done, separators=(",", ":")) + "\n")
+    reg = home / ".claude/sessions"
+    f_pid, g_pid, i_pid, j_pid = (p.pid for p in sleepers)
+    for pid, key, status in ((f_pid, "F", "idle"), (g_pid, "G", "idle"), (i_pid, "I", "waiting"), (j_pid, "J", "idle")):
+        write(reg / ("%d.json" % pid), {"pid": pid, "sessionId": "cli" + key, "hostSessionId": "local_" + key, "procStart": lstart(pid),
+                                        "startedAt": started, "status": status, "waitingFor": "permission prompt"})
+    busy = subprocess.Popen([sys.executable, "-c", "while True: pass"])
+    busy2 = subprocess.Popen([sys.executable, "-c", "while True: pass"])
+    idle = subprocess.Popen(["sleep", "120"])
+    table = [
+        (busy.pid, 1, "python3 render.py CLAUDE_PID=99999 CLAUDE_CODE_SESSION_ID=cliH"),            # detached, its session closed
+        (busy2.pid, 1, "python3 render.py CLAUDE_PID=%d CLAUDE_CODE_SESSION_ID=cliI" % i_pid),
+        (idle.pid, 1, "helperd CLAUDE_PID=%d CLAUDE_CODE_SESSION_ID=cliG" % g_pid),                 # idle leftover
+        (os.getpid(), 1, "python3 teamcamel.py CLAUDE_PID=%d CLAUDE_CODE_SESSION_ID=cliG" % g_pid),  # TeamCamel itself
+    ]
+    real_table = tc.process_table
+    tc.process_table = lambda: table
+    try:
+        deadline = time.time() + 15
+        while time.time() < deadline and sum(p["cpu"] >= tc.BUSY_CPU for p in tc.marked_processes(table)) < 2:
+            time.sleep(0.5)
+        procs = {p["pid"]: p for p in tc.marked_processes(table)}
+        ok(set(procs) == {busy.pid, busy2.pid, idle.pid} and procs[busy.pid]["cpu"] >= tc.BUSY_CPU and procs[idle.pid]["cpu"] < tc.BUSY_CPU,
+           "processes carrying a session's marks found, busy told from idle; TeamCamel itself left out")
+        got = {s["title"]: s for s in tc.collect()}
+        f, g, h, i, j = (got[t] for t in ("Job with a helper agent", "Job with an idle leftover", "Closed job still rendering",
+                                          "Waiting job still rendering", "Job whose command ended unnoticed"))
+        ok(f["state"] == "working" and f["detail"] == "in background (agent)" and f["since"] == now - 240000 and not f["attention"],
+           "finished turn, helper agent still running: working in background")
+        ok(g["state"] == "completed", "an idle leftover program does not count")
+        ok(h["state"] == "working" and h["detail"].startswith("in background (") and not h["live"],
+           "session closed, the program it started still busy: working in background")
+        ok(i["state"] == "input", "awaiting input stays awaiting input")
+        ok(j["state"] == "completed", "a background command with no shell left is over, notice or not")
+        table.append((424242, j_pid, "/bin/zsh -c source /u/.claude/shell-snapshots/snapshot-zsh-1.sh && sleep 300"))
+        ok({s["title"]: s for s in tc.collect()}["Job whose command ended unnoticed"]["detail"] == "in background (command)",
+           "a background command whose shell still runs: working in background")
+        tc.process_table = lambda: None
+        ok({s["title"]: s for s in tc.collect()}["Job whose command ended unnoticed"]["state"] == "working",
+           "where processes cannot be read (Windows): the transcript alone decides")
+        busy.kill(); busy2.kill(); busy.wait(); busy2.wait()
+        tc.process_table = lambda: table
+        got = {s["title"]: s for s in tc.collect()}
+        ok(got["Closed job still rendering"]["state"] == "completed", "the program ended: completed again")
+    finally:
+        tc.process_table = real_table
+        for p in (busy, busy2, idle):
+            p.kill()
+    rows = tc.process_table()
+    ok(rows is not None and any(pid == os.getpid() for pid, _, _ in rows), "process table of this computer read")
+
     print("the page")
     restore()
     html = (tc.WEB / "index.html").read_text(encoding="utf-8")

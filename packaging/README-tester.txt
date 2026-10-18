@@ -64,6 +64,10 @@ READING THE PAGE
 
 - Red: the session awaits your input, or was interrupted. Blue: working.
   Gray: completed.
+- "Working in background" means Claude's turn is over but work it started
+  still runs: a command or a helper agent sent to the background, or a
+  program the session started that is still busy, such as a render. It turns
+  to completed when that work ends.
 - The number after your computer's name counts the sessions that need you. It
   also shows at the front of the browser tab's title.
 - ". . ." unfolds the older sessions of a workspace.
@@ -89,8 +93,11 @@ TESTING NOTES
 
 - It runs daily on macOS and has been run on Linux. On Windows nobody has run
   it yet: if you are on Windows, you are the first.
-- New in this version: double-clicking web/index.html shows the setup
-  steps. If you set up from there, please say whether they worked as shown.
+- New in this version: "working in background". If a session shows as
+  completed while something it started is still running, or as working
+  after that work has ended, please say so.
+- Double-clicking web/index.html shows the setup steps. If you set up from
+  there, please say whether they worked as shown.
 - If you use Codex, please check that what the page says about a Codex
   session matches what Codex shows.
 - If something goes wrong or looks odd, please send back what the precheck

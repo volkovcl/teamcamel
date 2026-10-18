@@ -4,6 +4,33 @@ TeamCamel change log
 Newest version first.
 
 
+Version 1.9 - 2026-10-18
+------------------------
+
+New
+- Working in background. A session whose turn is over but whose work goes on
+  now shows as "working in background (...)" in blue instead of completed,
+  and turns to completed when that work ends. Counted:
+  - commands and helper agents Claude sent to the background, from the
+    records Claude keeps of when each starts and ends;
+  - programs a session started that are still busy, such as a render, even
+    after the session's window was closed. Every program a session starts
+    carries a mark naming the session; one that sits idle (a helper service
+    left running) is not counted.
+  Awaits input and interrupted stay as they were, and the count of sessions
+  needing you is unchanged.
+
+Limits
+- Work done inside another app's own window is not counted, for example the
+  Blender app rendering at a session's request through its connector.
+- On Windows only background commands and helper agents are counted.
+
+Tested
+- macOS and Linux (Ubuntu 26.04): automated checks with a background
+  command, a helper agent, an idle leftover and a busy detached program, and
+  a live run on each. Windows: by simulation only.
+
+
 Version 1.8 - 2026-10-16
 ------------------------
 
