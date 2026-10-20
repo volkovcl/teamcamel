@@ -81,7 +81,7 @@ try:
 except ImportError:   # a Python built without it: Codex threads are then read from their files
     sqlite3 = None
 
-__version__ = "1.9"
+__version__ = "2.1"
 
 WINDOWS = sys.platform.startswith("win")
 MACOS = sys.platform == "darwin"
@@ -908,6 +908,185 @@ def work_detail(labels):
     return "in background (%s)" % ", ".join(words)
 
 
+# --- versions of Claude Code and Codex ------------------------------------------
+#
+# Each computer reports the versions it runs; the page colors them against the newest.
+
+VERSION_EVERY = 600            # seconds between re-reading installed versions
+_version_cache = {}
+_last_registry = []
+
+
+def version_key(text):
+    """(2, 1, 304) from '2.1.304' or 'codex-cli 0.162.0-alpha.17.2'; None without a version number."""
+    m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", str(text or ""))
+    return tuple(int(x or 0) for x in m.groups()) if m else None
+
+
+def newest_version(texts):
+    found = [(version_key(t), str(t)) for t in texts if version_key(t)]
+    return max(found)[1] if found else None
+
+
+def command_version(exe):
+    """'2.1.292' from running `exe --version`; None if it does not answer."""
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.]+)?", out.stdout)
+    return m.group(0) if m else None
+
+
+def _cached(name, read):
+    hit = _version_cache.get(name)
+    if hit and time.time() - hit[0] < VERSION_EVERY:
+        return hit[1]
+    value = read()
+    _version_cache[name] = (time.time(), value)
+    return value
+
+
+def claude_code_version(registry):
+    """The Claude Code version this computer runs: the newest one its running sessions use,
+    else the newest one installed (the desktop app's copies, the claude command)."""
+    running = newest_version(e.get("version") for e in registry)
+    if running:
+        return running
+
+    def installed():
+        found = [p.name for root in desktop_roots() if (root / "claude-code").is_dir()
+                 for p in (root / "claude-code").iterdir()]
+        exe = shutil.which("claude")
+        if exe:
+            found.append(command_version(exe))
+        return newest_version(found)
+    return _cached("claude", installed)
+
+
+CODEX_APP_CLI = ("Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",)
+
+
+def codex_version():
+    """The newest Codex on this computer: the codex command, the copy inside the Codex desktop app,
+    or the version its newest threads were run with."""
+    def read():
+        found = []
+        exe = shutil.which("codex")
+        if exe:
+            found.append(command_version(exe))
+        if MACOS:
+            for rel in CODEX_APP_CLI:
+                for base in (Path("/"), HOME):
+                    if (base / rel).exists():
+                        found.append(command_version(str(base / rel)))
+        try:
+            threads = codex_threads()
+        except Exception:
+            threads = []
+        for t in sorted(threads, key=lambda t: t.get("updated_at_ms") or 0, reverse=True)[:5]:
+            try:
+                with open(str(t.get("rollout_path") or ""), "rb") as fh:
+                    m = re.search(rb'"cli_version":"([^"]+)"', fh.read(65536))
+            except OSError:
+                continue
+            if m:
+                found.append(m.group(1).decode("ascii", "replace"))
+        return newest_version(found)
+    return _cached("codex", read)
+
+
+def app_versions():
+    apps = {"claude": claude_code_version(_last_registry), "codex": codex_version()}
+    return {k: v for k, v in apps.items() if v}
+
+
+# --- settings ----------------------------------------------------------------------
+#
+# Kept in the shared folder: one file with the settings for all computers, and one per
+# computer that chose its own. Each computer's page receives both and uses its own computer's
+# when there is one; every browser on the computer therefore sees the same settings.
+
+SETTINGS_SHARED = "teamcamel.settings"      # in STATE; not *.json, so never taken for a computer's report
+SETTINGS_MAX = 32 * 1024
+_HEX = re.compile(r"#[0-9A-Fa-f]{6}")
+_settings_cache = {}
+
+
+def clean_settings(d):
+    """Only the settings the page knows, each of the right kind; anything else is dropped."""
+    if not isinstance(d, dict):
+        return {}
+    out = {}
+    for key in ("order", "hidden"):
+        v = d.get(key)
+        if isinstance(v, list):
+            out[key] = [x[:200] for x in v if isinstance(x, str)][:100]
+    for key, names in (("apps", ("claude", "codex")), ("systems", ("macOS", "Windows", "Linux")),
+                       ("notify", ("popup", "sound", "title"))):
+        v = d.get(key)
+        if isinstance(v, dict):
+            out[key] = {n: v[n] for n in names if isinstance(v.get(n), bool)}
+    for key in ("versions", "online"):
+        if isinstance(d.get(key), bool):
+            out[key] = d[key]
+    v = d.get("colors")
+    if isinstance(v, dict):
+        out["colors"] = {n: v[n] for n in ("bg", "attn", "work", "muted")
+                         if isinstance(v.get(n), str) and _HEX.fullmatch(v[n])}
+    return out
+
+
+def settings_path(name=None):
+    """The file of the settings for all computers, or (with a name) that computer's own."""
+    if name is None:
+        return STATE / SETTINGS_SHARED
+    return STATE / (SETTINGS_SHARED + "." + (re.sub(r"[^\w.-]", "_", name).strip(".") or "node"))
+
+
+def read_settings(path):
+    """The settings in a file, or None."""
+    try:
+        key = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    hit = _settings_cache.get(path)
+    if hit and hit[0] == key:
+        return hit[1]
+    try:
+        value = clean_settings(read_json(path))
+    except (OSError, ValueError):
+        return hit[1] if hit else None      # caught half-synced: keep the last good copy
+    _settings_cache[path] = (key, value)
+    return value
+
+
+def shared_settings():
+    """The settings chosen for all computers, or None."""
+    return read_settings(settings_path())
+
+
+def own_settings(name):
+    """The settings a computer chose for itself, or None."""
+    return read_settings(settings_path(name))
+
+
+def save_settings(d, name=None):
+    """Write the settings for all computers, or (with a name) that computer's own."""
+    STATE.mkdir(exist_ok=True)
+    path = settings_path(name)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(clean_settings(d), indent=1), encoding="utf-8")
+    os.replace(str(tmp), str(path))
+
+
+def drop_own_settings(name):
+    try:
+        settings_path(name).unlink()
+    except OSError:
+        pass
+
+
 # --- snapshot ----------------------------------------------------------------
 
 def classify(live, cli_id, last_activity, background=None):
@@ -934,7 +1113,8 @@ def classify(live, cli_id, last_activity, background=None):
 
 
 def collect():
-    registry = live_registry()
+    global _last_registry
+    registry = _last_registry = live_registry()
     by_host = {e["hostSessionId"]: e for e in registry if e.get("hostSessionId")}
     by_cli = {e["sessionId"]: e for e in registry if e.get("sessionId")}
     sessions, matched = [], set()
@@ -1040,14 +1220,20 @@ class Node:
         restart()
 
     def build(self):
+        sessions = collect()
+        try:
+            apps = app_versions()
+        except Exception as err:   # never lose the session list over it
+            print("teamcamel: versions not read: %r" % err, file=sys.stderr)
+            apps = {}
         return {"schema": 1, "node": self.name, "host": self.host, "os": self.os,
-                "version": __version__, "generatedAt": now_ms(), "sessions": collect()}
+                "version": __version__, "generatedAt": now_ms(), "sessions": sessions, "apps": apps}
 
     def tick(self):
         snap = self.build()
         with self.lock:
             self.snapshot = snap
-        digest = hashlib.sha1(json.dumps(snap["sessions"], sort_keys=True).encode()).hexdigest()
+        digest = hashlib.sha1(json.dumps([snap["sessions"], snap.get("apps")], sort_keys=True).encode()).hexdigest()
         age = time.time() - self.written_at
         if (digest != self.written_hash and age >= WRITE_MIN_GAP) or age >= HEARTBEAT:
             try:
@@ -1090,6 +1276,9 @@ class Node:
         others.sort(key=lambda d: str(d["node"]).lower())
         return {"now": now_ms(), "self": self.name, "version": __version__, "pollSec": COLLECT_EVERY,
                 "heartbeatSec": HEARTBEAT, "page": page_stamp(), "pid": os.getpid(),
+                # settingsScopes: this TeamCamel keeps "mine" and "shared" settings apart (2.1); a page
+                # newer than a TeamCamel that has not restarted yet must not save to an older one
+                "settingsScopes": True, "settings": shared_settings(), "mySettings": own_settings(self.name),
                 "nodes": [mine] + others}
 
 
@@ -1110,6 +1299,44 @@ def make_handler(node):
             if path == "/api/state":
                 return self.reply(200, "application/json", json.dumps(node.merged()).encode())
             self.reply(404, "text/plain", b"not found")
+
+        def do_POST(self):
+            # Only this computer's own page may change the shared settings: a page from any web site
+            # could send a request here, so it must come with the right Host and Origin, and with a
+            # header a foreign page cannot add without asking first (which this server never allows).
+            host = (self.headers.get("Host") or "").split(":")[0]
+            origin = self.headers.get("Origin")
+            local = ("http://127.0.0.1:%d" % self.server.server_port, "http://localhost:%d" % self.server.server_port)
+            if (host not in ("127.0.0.1", "localhost") or (origin is not None and origin not in local)
+                    or self.headers.get("X-TeamCamel") != "1"):
+                return self.reply(403, "text/plain", b"local page only")
+            if self.path.split("?")[0] != "/api/settings":
+                return self.reply(404, "text/plain", b"not found")
+            try:
+                size = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                size = -1
+            if not 0 < size <= SETTINGS_MAX:
+                return self.reply(413, "text/plain", b"too large")
+            try:
+                body = json.loads(self.rfile.read(size))
+                if not isinstance(body, dict):
+                    raise ValueError("not an object")
+                # {"scope": "mine" | "shared", "settings": {...}}; a bare object is for all computers (2.0)
+                where, values = (body.get("scope"), body.get("settings")) if "scope" in body else ("shared", body)
+                if where == "mine":
+                    save_settings(values, node.name)
+                elif where == "shared":
+                    save_settings(values)
+                    drop_own_settings(node.name)      # this computer now follows the settings for all
+                else:
+                    raise ValueError("unknown scope")
+            except ValueError:
+                return self.reply(400, "text/plain", b"not settings")
+            except OSError as err:
+                return self.reply(500, "text/plain", str(err).encode())
+            self.reply(200, "application/json", json.dumps({"settings": shared_settings(),
+                                                             "mySettings": own_settings(node.name)}).encode())
 
         def reply(self, code, ctype, body):
             self.send_response(code)
@@ -1381,6 +1608,9 @@ def check(port):
         except (OSError, ValueError, KeyError, TypeError):
             seen.append("%s (unreadable)" % p.name)
     line("Computers reporting", "; ".join(seen) or "none yet")
+    collect()
+    apps = app_versions()
+    line("Versions", "Claude Code %s; Codex %s" % (apps.get("claude") or "not found", apps.get("codex") or "not found"))
     line("Monitor", "running at http://127.0.0.1:%d/" % port if is_running(port) else "not running")
     try:
         ours = our_hooks(read_json(SETTINGS))[1] if SETTINGS.exists() else []

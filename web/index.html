@@ -79,6 +79,38 @@
   /* The TeamCamel logo: shapes only (lettering traced from PT Sans), so it needs no font. */
   .logo { height: 14.4px; width: auto; fill: var(--ink); vertical-align: baseline; margin-right: 1px; }
 
+  /* Versions of Claude Code and Codex next to a computer's name. */
+  .apps { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 2px 0 0 18px; font-size: 13px; font-weight: 300; color: var(--muted); }
+  .chip { font-weight: 400; border-radius: 4px; padding: 0 5px; margin-left: 4px; white-space: nowrap; }
+  .chip.new { background: #C0DD97; color: #173404; }
+  .chip.near { background: #D3D1C7; color: #2C2C2A; }
+  .chip.old { background: #F7C1C1; color: #501313; }
+  .fresh .chip { font-size: 12px; }
+
+  /* The gear and the settings panel. */
+  .gear { font: inherit; font-size: 20px; line-height: 1; background: none; border: 0; padding: 0 4px; margin-right: auto;
+          color: var(--muted); cursor: pointer; }
+  .gear:hover, .gear:focus-visible { color: var(--ink); }
+  .gear:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .panel { position: fixed; top: 44px; left: 12px; z-index: 10; width: min(380px, calc(100vw - 24px));
+           max-height: calc(100vh - 110px); overflow-y: auto; background: #fff; color: #15180E;
+           border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px 14px; font-size: 15px; font-weight: 400;
+           box-shadow: 0 6px 24px rgba(0,0,0,.12); }
+  .panel h3 { font-size: 15px; font-weight: 700; margin: 14px 0 6px; }
+  .panel h3:first-of-type { margin-top: 4px; }
+  .panel label { display: inline-flex; align-items: center; gap: 6px; margin: 2px 14px 2px 0; }
+  .panel .row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  .panel .row .who { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .panel .note { color: #586050; font-size: 13px; font-weight: 300; margin: 2px 0 6px; }
+  .panel button { font: inherit; font-size: 13px; background: none; border: 1px solid #586050; border-radius: 4px;
+                  padding: 1px 8px; color: #15180E; cursor: pointer; }
+  .panel .close { float: right; border: 0; font-size: 20px; line-height: 1; padding: 0 2px; }
+  .panel input[type=color] { width: 34px; height: 22px; padding: 0; border: 1px solid var(--rule); background: none; }
+  .panel .colors label { display: flex; justify-content: space-between; margin: 3px 0; }
+  .panel .line { display: flex; flex-wrap: wrap; align-items: center; margin: 2px 0; }
+  .panel .lead { font-weight: 500; margin-right: 10px; min-width: 70px; }
+  .panel .sub { margin: 0 0 6px 24px; }
+
   /* Opened as a file (double-clicked) instead of at TeamCamel's address: the setup guide. */
   .guide { display: block; max-width: 780px; }
   .guide h1 { font-size: 24px; font-weight: 900; margin: 0 0 4px; }
@@ -101,6 +133,7 @@
 </head>
 <body>
 <div class="bar" id="bar"></div>
+<aside class="panel" id="settings" hidden aria-label="Settings"></aside>
 <main class="nodes" id="nodes"></main>
 <footer class="foot"><svg class="logo" viewBox="54 522 1146 146" role="img" aria-label="TeamCamel"><title>TeamCamel</title><path class="letters" d="M158.54 542.47L115.39 542.47L115.39 666.37L98.96 666.37L98.96 542.47L55.81 542.47L55.81 527.82L158.54 527.82ZM178.93 527.82L254.34 527.82L254.34 542.47L195.35 542.47L195.35 587.79L249.39 587.79L249.39 602.44L195.35 602.44L195.35 651.72L255.33 651.72L255.33 666.37L178.93 666.37ZM350.93 627.97L299.86 627.97L286.01 666.37L269.78 666.37L322.23 525.64L329.75 525.64L382.40 666.37L365.18 666.37ZM305.20 613.72L345.98 613.72L330.54 571.56L325.59 550.58L325.39 550.58L320.45 571.96Z"/><path class="camel" d="M600.05,540.99c-9.66,1.28-10.76-3.67-11.8-4.52s-13.52-11.96-20.51.99c0,0-7.24.22-4.28,7.49-5.17,7.95.39,16.17-10.28,19.16-14.77,0-6.63-39.16-37.24-39.16-28.46-.64-18.4,28.25-31.03,27.82-14.12-.21-12.41-28.03-31.67-28.25-27.39.64-16.48,17.76-34.45,31.03-11.31,11.86-16.59,36.05-17.84,47.12-9.01,12.29-4.84,20.82-4.84,20.82,0,0,6.62-6.67,7.73-19.58.35-2.93,5.27-17.21,5.93-18.28.66-1.07,4.08-5.62,4.71-5.35.63.27-.35,4.98-.21,8.77s1.85,6.68,1.95,9.73c1.89,9.72-5.6,20.6-6.42,25.68-.27,3.13.64,5.14.64,5.14,3.08,7.79-2.72,25.67-.21,31.89,0,0-.14,1.46,0,2.14.14.68.2.99.64,1.5s.9.84,1.71,1.07c.81.23,22.93.09,23.33,0,.39-.09.66-.13.86-.43.2-.3.43-1.75.21-3-.21-1.25-.9-2.5-1.5-3.42s-.65-1.64-1.71-1.93c-2.45-.65-4.18-.28-4.49-2.35-6.57-14.6,2.37-26.14,4.71-30.6,1.55-2.78,2.38-4.48,3.21-6.63s.98-2.88,1.5-5.14c2.02-23.53,8.62-25.81,14.55-28.46q2.13-1.08,3.85-1.5c1.73-.41,2.45-.56,4.28-.43,1.83.13,3.49.5,5.14,1.28,1.64.78,2.17,1.24,3.42,2.57,1.26,1.33,1.74,2.05,2.57,3.85.83,1.8,1.38,3.93,1.93,6.85.54,2.92.5,3.87.64,6.85.14,2.97-.14,22.69,0,24.18.14,1.5.23,1.98.64,3.42.41,1.45,2.09,4.83,2.57,6.63.48,1.8.55,2.42.64,4.28.09,1.86-.1,6.58-.43,8.56-.33,1.99-.58,2.6-1.28,4.49-.7,1.89-1.99,3.45-2.35,5.14s-.23,3.43,0,4.07.68,1,1.07,1.28c.39.28.59.34,1.07.43.48.09,25.1-.03,25.47-.21.37-.19.52-.44.64-.86.12-.42.08-1.51-.21-2.57-.3-1.06-.71-2.14-1.71-3.42s-1.58-1.63-3-2.57c-1.41-.94-3.21-1.21-4.28-2.14-1.07-.93-1.4-1.45-1.93-2.78s-.75-3.14-.86-5.56c-.11-2.42.19-4.95.43-6.63.24-1.69.33-2.23.86-3.85.52-1.62,1.21-2.5,1.93-4.49.71-1.99,1.03-2.87,1.5-5.14.47-2.26.57-3.87.86-6.85.29-2.98.98-16.8,1.28-19.05.31-2.25.7-3.81,1.07-5.14.37-1.32.49-1.75,1.07-3,.58-1.24,1-2.24,2.14-3.64,1.14-1.4,2.61-2.81,4.28-3.85,1.67-1.04,2.36-1.25,4.28-1.71s2.69-.55,4.71-.43c2.02.12,3.54.54,4.92,1.07,1.38.53,1.85.78,3,1.71,1.14.93,2.41,2.44,3.21,3.64.8,1.19.98,1.65,1.5,3,.52,1.35.72,2.16,1.07,3.85.35,1.69.6,3.51.86,6.21.26,2.7.94,20.85,1.28,23.11.34,2.26.52,2.99,1.28,5.14.77,2.15,2.72,4.97,3.42,7.28.7,2.31.76,3.14.86,5.56.1,2.42.14,5.32-.64,9.2-.78,3.89-3.09,8.69-3.21,9.42-.12.72-.13.99,0,1.71.13.72.17,1.12.64,1.71.47.59,1.01,1.01,1.93,1.28.92.28,24.56.23,25.04,0s.67-.54.86-1.07c.19-.53.1-.87,0-1.5-.1-.63-.38-1.97-1.07-3.21-.69-1.24-1.03-1.68-2.14-2.57-1.11-.89-4.44-2.15-5.35-2.78s-1.34-.98-1.93-1.71-7.99-50.41,10.88-55.97c1.27-.49,7.07-2.13,11.59-7.26,7.25-4.83,7.43-20.47,7.26-21.74-.17-1.27-.24-4.74.01-5.06s13.86-.71,17.52-4.12c.79.19,4.68,3.84,8.35,3.21,1.99,1.24,7.71-5.69,3.88-11.1,0,0-.25-10.52-10.49-10.3Z"/><path class="letters" d="M718.43 660.63Q712.49 665.18 703.38 666.96Q694.28 668.75 683.99 668.75Q671.52 668.75 660.63 664.49Q649.74 660.23 641.63 651.53Q633.51 642.82 628.76 629.26Q624.01 615.70 624.01 597.09Q624.01 577.70 629.26 564.14Q634.50 550.58 643.11 541.97Q651.72 533.36 662.41 529.40Q673.10 525.44 684.18 525.44Q696.06 525.44 703.58 526.73Q711.10 528.02 716.45 530.19L712.49 544.64Q702.99 540.09 685.37 540.09Q677.26 540.09 669.34 543.06Q661.42 546.03 655.19 552.76Q648.95 559.49 645.19 570.37Q641.43 581.26 641.43 597.09Q641.43 611.35 644.99 622.03Q648.56 632.72 654.79 639.85Q661.03 646.97 669.44 650.54Q677.85 654.10 687.75 654.10Q696.65 654.10 703.29 652.32Q709.92 650.54 714.47 647.76ZM803.14 627.97L752.07 627.97L738.22 666.37L721.99 666.37L774.44 525.64L781.96 525.64L834.61 666.37L817.39 666.37ZM757.42 613.72L798.19 613.72L782.75 571.56L777.81 550.58L777.61 550.58L772.66 571.96ZM959.51 573.34L961.48 552.56L960.50 552.56L952.97 571.56L916.95 634.11L912.00 634.11L873.80 571.36L866.68 552.56L865.69 552.56L868.46 573.14L868.46 666.37L853.02 666.37L853.02 527.82L865.29 527.82L908.64 598.68L915.17 614.12L915.56 614.12L921.70 598.28L963.07 527.82L975.93 527.82L975.93 666.37L959.51 666.37ZM1009.58 527.82L1084.99 527.82L1084.99 542.47L1026.01 542.47L1026.01 587.79L1080.04 587.79L1080.04 602.44L1026.01 602.44L1026.01 651.72L1085.98 651.72L1085.98 666.37L1009.58 666.37ZM1197.62 666.37L1115.67 666.37L1115.67 527.82L1132.10 527.82L1132.10 651.72L1197.62 651.72Z"/></svg><span id="credit"> © 2026, Aleksandr A. Volkov</span><span id="ver"></span></footer>
 
@@ -111,6 +144,7 @@ const RANK = s => s.state === 'input' ? 0 : (s.state === 'interrupted' && s.atte
 
 let data = null, failed = false, timer = null, pollMs = 15000, pageStamp = null;
 let bothApps = false;       // Claude and Codex sessions are both on the page: label each session
+let view = null;            // the settings the page was last drawn with
 let opened = new Set();
 try { opened = new Set(JSON.parse(localStorage.getItem('teamcamel.open') || '[]')); } catch (e) {}
 
@@ -242,6 +276,8 @@ function nodeColumn(p, now) {
     : '[updated: ' + p.at + ', ' + p.ago + ' ago]'));
   h.title = about(p.node);
   col.append(h);
+  const apps = view && view.versions ? appsEl(p.node, view) : null;
+  if (apps) col.append(apps);
   if (!p.wss.length) col.append(el('div', 'none', 'no sessions'));
   for (const ws of p.wss) col.append(wsEl(p, ws, now, false));
   return col;
@@ -258,6 +294,8 @@ function othersColumn(ps, now) {
     const item = el('span', '', p.node.node + (p.node.os ? ' (' + p.node.os + ')' : '') + (p.stale
       ? ': not reporting since ' + p.at : ': updated ' + p.ago + ' ago'));
     item.title = about(p.node);
+    const apps = view && view.versions ? appsEl(p.node, view, 'versions') : null;
+    if (apps) item.append(' ', apps);
     fresh.append(item);
   }
   col.append(fresh);
@@ -269,26 +307,386 @@ function othersColumn(ps, now) {
   return col;
 }
 
+// ---- Settings ---------------------------------------------------------------------------------
+// Either this computer's own or the ones for all computers; teamcamel.py keeps both in the shared
+// TeamCamel folder and sends them with the page data, so every browser on a computer sees the same.
+
+const DEFAULTS = {
+  order: [], hidden: [],
+  apps: { claude: true, codex: true },
+  systems: { macOS: true, Windows: true, Linux: true },
+  versions: true, online: false,
+  colors: { bg: '#E6EECF', attn: '#9A2B14', work: '#1553B5', muted: '#586050' },
+  notify: { popup: false, sound: false, title: false },
+};
+const MINE = 'teamcamel.settings';       // where 2.0 kept this computer's settings, in one browser only
+const LAST = 'teamcamel.lastSettings';   // the last settings drawn with: for the first moment, before the page data
+
+function complete(s) {
+  s = s && typeof s === 'object' ? s : {};
+  const out = JSON.parse(JSON.stringify(DEFAULTS));
+  for (const k of ['order', 'hidden']) if (Array.isArray(s[k])) out[k] = s[k].filter(x => typeof x === 'string');
+  for (const k of ['apps', 'systems', 'colors', 'notify'])
+    if (s[k] && typeof s[k] === 'object') for (const n in out[k]) if (typeof s[k][n] === typeof out[k][n]) out[k][n] = s[k][n];
+  for (const k of ['versions', 'online']) if (typeof s[k] === 'boolean') out[k] = s[k];
+  return out;
+}
+
+function mine() { return (data && data.mySettings) || null; }
+
+// 'mine': this computer's own settings are in force; 'shared': the ones for all computers.
+function scope() { return mine() ? 'mine' : (data && data.settings) ? 'shared' : 'mine'; }
+
+function settings() {
+  if (data) return complete(mine() || data.settings || null);
+  try { return complete(JSON.parse(localStorage.getItem(LAST) || 'null')); } catch (e) { return complete(null); }
+}
+
+// True once TeamCamel has kept them. A TeamCamel older than this page (it restarts on its own
+// a moment after the page reloads) cannot keep them; until then they are not sent.
+async function save(s, where) {
+  where = where || scope();
+  if (data && !data.settingsScopes) { render(); return false; }
+  if (data) {
+    if (where === 'mine') data.mySettings = s;
+    else { data.settings = s; data.mySettings = null; }
+  }
+  render();
+  try {
+    const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TeamCamel': '1' },
+                                             body: JSON.stringify({ scope: where, settings: s }) });
+    if (!r.ok) return false;
+    const kept = await r.json();
+    if (data) { Object.assign(data, kept); render(); }
+    return 'mySettings' in kept;
+  } catch (e) { return false; }
+}
+
+// 2.0 kept "only this computer" settings in one browser: hand them over to TeamCamel, once, and
+// let go of the browser's copy only when TeamCamel has kept them.
+let adopting = false;
+async function adoptOldSettings() {
+  if (adopting || !data.settingsScopes) return;
+  let old = null;
+  try { old = localStorage.getItem(MINE); } catch (e) {}
+  if (!old) return;
+  const drop = () => { try { localStorage.removeItem(MINE); } catch (e) {} };
+  if (data.mySettings) return drop();      // this computer already has its own: another browser handed them over
+  let s;
+  try { s = complete(JSON.parse(old)); } catch (e) { return drop(); }
+  adopting = true;
+  if (await save(s, 'mine')) drop();
+  adopting = false;
+}
+
+function applyColors(c) {
+  const root = document.documentElement.style;
+  root.setProperty('--bg', c.bg); root.setProperty('--attn', c.attn);
+  root.setProperty('--work', c.work); root.setProperty('--muted', c.muted);
+}
+
+function systemOf(node) {
+  const os = String(node.os || '');
+  return os.startsWith('macOS') ? 'macOS' : os.startsWith('Windows') ? 'Windows' : 'Linux';
+}
+
+// The chosen order first; computers not in it after, as they come (this computer first).
+function ordered(nodes, s) {
+  const at = name => { const i = s.order.indexOf(name); return i < 0 ? s.order.length : i; };
+  return nodes.map((n, i) => [n, i]).sort((a, b) => at(a[0].node) - at(b[0].node) || a[1] - b[1]).map(x => x[0]);
+}
+
+// ---- Versions -------------------------------------------------------------------------------
+// Green: the latest. Grey: not the latest. Red: may be outdated, that is behind a big version:
+// for Claude Code its first two numbers (2.1); Codex is still at 0.x and moves its second number
+// almost weekly, so for it 4 releases (about a month).
+
+let online = null;   // latest versions from the npm registry, when the setting allows the look-up
+try { online = JSON.parse(localStorage.getItem('teamcamel.newest') || 'null'); } catch (e) {}
+
+function parseVersion(v) {
+  const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(v || ''));
+  return m ? [+m[1], +m[2], +(m[3] || 0)] : null;
+}
+
+function compareVersions(a, b) {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+function versionMark(app, version, newest) {
+  const a = parseVersion(version), n = parseVersion(newest);
+  if (!a || !n || compareVersions(a, n) >= 0) return 'new';
+  if (app === 'codex' && a[0] === 0 && n[0] === 0) return n[1] - a[1] >= 4 ? 'old' : 'near';
+  return a[0] === n[0] && a[1] === n[1] ? 'near' : 'old';
+}
+
+function newestOf(app, s) {
+  const seen = data.nodes.map(n => (n.apps || {})[app]).filter(parseVersion);
+  if (s.online && online && online[app]) seen.push(online[app]);
+  return seen.reduce((best, v) => !best || compareVersions(parseVersion(v), parseVersion(best)) > 0 ? v : best, null);
+}
+
+async function lookUpNewest() {
+  if (online && Date.now() - online.at < 86400000) return;
+  const get = async name => (await (await fetch('https://registry.npmjs.org/' + name + '/latest', { cache: 'no-store' })).json()).version;
+  try {
+    const [claude, codex] = await Promise.all([get('@anthropic-ai/claude-code'), get('@openai/codex')]);
+    online = { at: Date.now(), claude, codex };
+    try { localStorage.setItem('teamcamel.newest', JSON.stringify(online)); } catch (e) {}
+    render();
+  } catch (e) {}   // offline or refused: the latest seen on your computers stands
+}
+
+function appsEl(node, s, cls) {
+  const box = el('span', cls || 'apps');
+  for (const [app, label] of [['claude', 'Claude'], ['codex', 'Codex']]) {
+    const v = (node.apps || {})[app];
+    if (!v || !s.apps[app]) continue;
+    const newest = newestOf(app, s), mark = versionMark(app, v, newest);
+    const shown = (/\d+\.\d+(?:\.\d+)?/.exec(v) || [v])[0];
+    const chip = el('span', 'chip ' + mark, shown);
+    chip.title = v + (mark === 'new' ? ': the latest' : mark === 'near' ? ': not the latest, ' + newest + ' is'
+                      : ': may be outdated, ' + newest + ' is the latest') +
+      (s.online && online ? ' (published version, checked ' + age(Date.now() - online.at) + ' ago)' : ' (latest seen on your computers)');
+    const item = el('span', '', label);
+    item.append(chip);
+    box.append(item);
+  }
+  return box.childNodes.length ? box : null;
+}
+
+// ---- Notifications --------------------------------------------------------------------------
+// When a session starts needing you, in any of the ways chosen: a pop-up notice, a sound, a
+// blinking tab title. They work while the page is open in a browser tab, also in the background.
+
+let needing = null, blink = null, audio = null;
+
+function notifyWanted(s) { return s.notify.popup || s.notify.sound || s.notify.title; }
+
+function beep() {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    audio.resume();
+    [0, 0.18].forEach((t, i) => {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = i ? 880 : 660;
+      g.gain.setValueAtTime(0.0001, audio.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.2, audio.currentTime + t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + t + 0.16);
+      o.connect(g).connect(audio.destination);
+      o.start(audio.currentTime + t); o.stop(audio.currentTime + t + 0.17);
+    });
+  } catch (e) {}
+}
+
+// Blinks until you come back to the page; never while you are looking at it, except to show
+// what it looks like ("Try it"), and then for a few seconds.
+function startBlink(trial) {
+  if (blink || (!trial && !document.hidden && document.hasFocus())) return;
+  let on = false, flips = 0;
+  blink = setInterval(() => {
+    on = !on;
+    document.title = on ? '● Needs you' : titleText;
+    if (trial && ++flips >= 10) stopBlink();
+  }, 700);
+}
+
+function stopBlink() {
+  if (blink) { clearInterval(blink); blink = null; document.title = titleText; }
+}
+
+function announce(list, s, trial) {
+  if (!list.length) return;
+  const first = list[0];
+  const text = first.s.title + ': ' + statusText(first.s, Date.now()).split('  · ')[0] + ', on ' + first.node +
+               (list.length > 1 ? ' (and ' + (list.length - 1) + ' more)' : '');
+  if (s.notify.popup && 'Notification' in window && Notification.permission === 'granted') {
+    const n = new Notification('TeamCamel: a session needs you', { body: text, tag: 'teamcamel' });
+    n.onclick = () => { window.focus(); n.close(); };
+  }
+  if (s.notify.sound) beep();
+  if (s.notify.title) startBlink(trial);
+}
+
+// Sessions that need you now and did not at the last look; nothing on the first look.
+function watch(shown, s) {
+  const now = new Map();
+  for (const p of shown) if (!p.stale) for (const ws of p.wss) for (const x of ws.sessions)
+    if (x.attention) now.set(p.node.node + '/' + x.id, { s: x, node: p.node.node });
+  if (needing && notifyWanted(s)) announce([...now].filter(([k]) => !needing.has(k)).map(([, v]) => v), s);
+  needing = new Set(now.keys());
+}
+
+let titleText = 'TeamCamel';
+document.addEventListener('visibilitychange', () => { if (!document.hidden) stopBlink(); });
+window.addEventListener('focus', stopBlink);
+
+// ---- The settings panel ----------------------------------------------------------------------
+
+function toggle(label, checked, onChange) {
+  const box = el('label'), input = el('input');
+  input.type = 'checkbox'; input.checked = checked;
+  input.addEventListener('change', () => onChange(input.checked, input));
+  box.append(input, label);
+  return box;
+}
+
+function buildPanel() {
+  const panel = document.getElementById('settings');
+  const s = settings(), where = scope();
+  const change = fn => { const t = settings(); fn(t); return save(t); };
+  const close = el('button', 'close', '×');
+  close.type = 'button'; close.title = 'Close'; close.addEventListener('click', closePanel);
+  panel.replaceChildren(close);
+
+  panel.append(el('h3', '', 'Settings apply to'));
+  for (const [value, label] of [['shared', 'all my computers'], ['mine', 'only this computer']]) {
+    const box = el('label'), input = el('input');
+    input.type = 'radio'; input.name = 'scope'; input.checked = where === value;
+    input.addEventListener('change', () => { save(settings(), value).then(buildPanel); });
+    box.append(input, label);
+    panel.append(box);
+  }
+  panel.append(el('p', 'note', where === 'mine'
+    ? 'Used by every browser on this computer; the other computers keep theirs.'
+    : 'Every computer that has not chosen its own follows them, in every browser.'));
+
+  if (data && data.nodes.length > 1) {
+    panel.append(el('h3', '', 'Computers'));
+    panel.append(el('p', 'note', 'The first one shown fills the left column; the rest share the right one.'));
+    const names = ordered(data.nodes, s).map(n => n.node);
+    names.forEach((name, i) => {
+      const row = el('div', 'row');
+      const show = toggle('', !s.hidden.includes(name), on => change(t => {
+        t.hidden = t.hidden.filter(x => x !== name); if (!on) t.hidden.push(name);
+      }));
+      const who = el('span', 'who', name + (name === data.self ? ' (this computer)' : ''));
+      const move = (dir, text) => {
+        const b = el('button', '', text); b.type = 'button'; b.title = dir < 0 ? 'Move up' : 'Move down';
+        b.disabled = (dir < 0 && i === 0) || (dir > 0 && i === names.length - 1);
+        b.addEventListener('click', () => change(t => {
+          const list = names.slice(); [list[i], list[i + dir]] = [list[i + dir], list[i]]; t.order = list;
+        }).then(buildPanel));
+        return b;
+      };
+      row.append(show, who, move(-1, '↑'), move(1, '↓'));
+      panel.append(row);
+    });
+  }
+
+  panel.append(el('h3', '', 'Show'));
+  const sessions = el('div', 'line');
+  sessions.append(el('span', 'lead', 'Sessions:'),
+                  toggle('Claude', s.apps.claude, on => change(t => { t.apps.claude = on; })),
+                  toggle('Codex', s.apps.codex, on => change(t => { t.apps.codex = on; })));
+  const versions = el('div', 'sub');
+  versions.append(toggle('Versions of Claude and Codex', s.versions, on => change(t => { t.versions = on; })),
+    el('div'),
+    toggle('Look up the latest versions online, once a day', s.online, on => {
+      change(t => { t.online = on; }); if (on) lookUpNewest();
+    }),
+    el('p', 'note', 'Asks the public npm registry, where Claude Code and Codex are published, for their latest ' +
+      'version numbers; nothing about you or your sessions is sent. When off, the latest version seen on your computers counts as latest.'));
+  const key = el('p', 'note');
+  key.append(el('span', 'chip new', 'latest'), ' ', el('span', 'chip near', 'not the latest'), ' ',
+             el('span', 'chip old', 'may be outdated'));
+  versions.append(key);
+  const systems = el('div', 'line');
+  systems.append(el('span', 'lead', 'OS(es):'));
+  for (const sys of ['macOS', 'Windows', 'Linux'])
+    systems.append(toggle(sys, s.systems[sys], on => change(t => { t.systems[sys] = on; })));
+  panel.append(sessions, versions, systems);
+
+  panel.append(el('h3', '', 'Colors'));
+  const colors = el('div', 'colors');
+  for (const [k, label] of [['bg', 'Background'], ['attn', 'Awaits input and interrupted'], ['work', 'Working'],
+                             ['muted', 'Completed, and quieter text']]) {
+    const box = el('label'), input = el('input');
+    input.type = 'color'; input.value = s.colors[k];
+    input.addEventListener('input', () => applyColors(Object.assign({}, settings().colors, { [k]: input.value })));
+    input.addEventListener('change', () => change(t => { t.colors[k] = input.value; }));
+    box.append(label, input);
+    colors.append(box);
+  }
+  const reset = el('button', '', 'Reset colors'); reset.type = 'button';
+  reset.addEventListener('click', () => change(t => { t.colors = Object.assign({}, DEFAULTS.colors); }).then(buildPanel));
+  panel.append(colors, reset);
+
+  panel.append(el('h3', '', 'When a session starts needing you'));
+  const permission = el('p', 'note');
+  const showPermission = () => {
+    permission.textContent = !('Notification' in window) ? 'This browser shows no pop-up notices.'
+      : Notification.permission === 'denied' ? 'Pop-up notices are blocked for this page in the browser settings.'
+      : Notification.permission === 'default' && settings().notify.popup ? 'The browser will ask to allow notices.' : '';
+  };
+  panel.append(
+    toggle('Pop-up notice', s.notify.popup, on => {
+      change(t => { t.notify.popup = on; });
+      if (on && 'Notification' in window && Notification.permission === 'default')
+        Notification.requestPermission().then(showPermission);
+      showPermission();
+    }),
+    toggle('Sound', s.notify.sound, on => { change(t => { t.notify.sound = on; }); if (on) beep(); }),
+    toggle('Blinking tab title', s.notify.title, on => change(t => { t.notify.title = on; })));
+  showPermission();
+  const test = el('button', '', 'Try it'); test.type = 'button';
+  test.addEventListener('click', () => announce([{ s: { title: 'A session', state: 'input', detail: 'permission prompt' },
+                                                  node: data ? data.self : 'this computer' }], settings(), true));
+  panel.append(permission, test,
+    el('p', 'note', 'These work while this page is open in a browser tab, also when the tab is in the background.'));
+
+  const all = el('button', '', 'Reset all settings'); all.type = 'button';
+  all.style.marginTop = '14px';
+  all.addEventListener('click', () => { save(complete(null)).then(buildPanel); });
+  panel.append(el('div'), all);
+}
+
+function openPanel() { buildPanel(); document.getElementById('settings').hidden = false; }
+function closePanel() { document.getElementById('settings').hidden = true; }
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
+document.addEventListener('click', e => {
+  const panel = document.getElementById('settings');
+  // composedPath: a click on a control the panel has since redrawn still counts as inside it
+  if (!panel.hidden && !e.composedPath().includes(panel) && !e.target.closest('.gear')) closePanel();
+});
+
 function render() {
   const bar = document.getElementById('bar'), main = document.getElementById('nodes');
   bar.replaceChildren();
+  const gear = el('button', 'gear', '⚙');
+  gear.type = 'button'; gear.title = 'Settings'; gear.setAttribute('aria-label', 'Settings');
+  gear.addEventListener('click', () => document.getElementById('settings').hidden ? openPanel() : closePanel());
+  bar.append(gear);
   if (failed) bar.append(el('span', 'err', 'TeamCamel collector is not answering on this computer'));
   bar.append(el('span', 'attn', 'awaits input / interrupted'), el('span', 'work', 'working'),
              el('span', '', 'completed'));
+  const s = settings();
+  applyColors(s.colors);
   if (!data) return;
+  view = s;
+  try { localStorage.setItem(LAST, JSON.stringify(s)); } catch (e) {}
 
   const now = Date.now();
-  const all = data.nodes.flatMap(node => node.sessions);
-  bothApps = all.some(s => s.app === 'codex') && all.some(s => s.app !== 'codex');
-  const ps = data.nodes.map(node => prep(node, now));
-  const others = ps.filter(p => !p.local);
+  // Computers in the chosen order, without the hidden ones; sessions of the apps chosen.
+  const nodes = ordered(data.nodes, s).filter(n => !s.hidden.includes(n.node) && s.systems[systemOf(n)] !== false)
+    .map(n => Object.assign({}, n, { sessions: n.sessions.filter(x => s.apps[x.app === 'codex' ? 'codex' : 'claude']) }));
+  const all = nodes.flatMap(node => node.sessions);
+  bothApps = all.some(x => x.app === 'codex') && all.some(x => x.app !== 'codex');
+  const ps = nodes.map(node => prep(node, now));
   const total = ps.reduce((n, p) => n + (p.stale ? 0 : p.attention), 0);
-  // Left: this computer. Right: the other node, or all the others together.
-  const cols = ps.filter(p => p.local).map(p => nodeColumn(p, now));
+  // Left: the first computer in the order (this one, unless chosen otherwise). Right: the next
+  // one, or all the others together.
+  const cols = ps.slice(0, 1).map(p => nodeColumn(p, now));
+  const others = ps.slice(1);
   if (others.length === 1) cols.push(nodeColumn(others[0], now));
   else if (others.length > 1) cols.push(othersColumn(others, now));
+  if (!ps.length) cols.push(el('div', 'none', 'Every computer is hidden by the settings (the gear, top left).'));
   main.replaceChildren(...cols);
-  document.title = (total ? '(' + total + ') ' : '') + 'TeamCamel';
+  titleText = (total ? '(' + total + ') ' : '') + 'TeamCamel';
+  if (!blink) document.title = titleText;
+  watch(ps, s);
 }
 
 async function refresh() {
@@ -304,6 +702,8 @@ async function refresh() {
     // A tester copy has no copyright line; then the version follows the logo directly.
     const sep = document.getElementById('credit') ? ' · ' : ' ';
     document.getElementById('ver').textContent = data.version ? sep + 'Ver. ' + data.version : '';
+    adoptOldSettings();
+    if (settings().online) lookUpNewest();
   } catch (e) {
     failed = true;
   }
@@ -312,7 +712,8 @@ async function refresh() {
 
 function schedule() {
   clearTimeout(timer);
-  if (document.hidden) return;          // no polling while the tab is in the background
+  // No polling while the tab is in the background, unless it is to tell you when a session needs you.
+  if (document.hidden && !notifyWanted(settings())) return;
   timer = setTimeout(async () => { await refresh(); schedule(); }, pollMs);
 }
 

@@ -52,7 +52,7 @@ def claude_sessions(home, sleepers):
             proc = subprocess.Popen(["sleep", "600"], start_new_session=True)
             sleepers.append(proc)
             time.sleep(0.2)
-            entry = {"pid": proc.pid, "sessionId": cli, "hostSessionId": sid, "procStart": lstart(proc.pid),
+            entry = {"pid": proc.pid, "sessionId": cli, "hostSessionId": sid, "procStart": lstart(proc.pid), "version": "2.1.304",
                      "name": title, "cwd": "/Users/sam/work/" + folder, "statusUpdatedAt": now - mins_ago * MIN,
                      "status": "waiting" if live[0] == "waiting" else "busy"}
             if live[0] == "waiting":
@@ -122,6 +122,7 @@ def other_computer(state, version):
 
     write(state / "office-pc.json", {
         "schema": 1, "node": "office-pc", "host": "OFFICE-PC", "os": "Windows", "version": version,
+        "apps": {"claude": "2.1.299", "codex": "0.163.0"},
         "generatedAt": now - 25000, "sessions": [
             s(1, "Add the export button", "client-portal", "input", "input needed", 11, True),
             s(2, "Tidy up the login screen", "client-portal", "completed", "", 130, False),

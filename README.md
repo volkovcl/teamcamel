@@ -16,7 +16,14 @@ carries a small "Claude" or "Codex" label.
 - The count of sessions needing you is next to each computer's name and at the front of the browser tab's title.
 - Click a session's name to open it in Claude or in the Codex app.
 - Several computers on one page: the left column is the computer you are at, the right one shows the others.
+- Under each computer's name, the Claude Code and Codex versions it runs: green for the latest, grey for not the
+  latest, red for may be outdated.
+- The gear at the top left opens the settings: which computers and apps to show and in what order, colors, the
+  versions, and a pop-up, sound or blinking tab title when a session starts needing you. They apply to all your
+  computers or only the one you are at (in every browser on it), as you choose.
 - It reads Claude Code's and Codex's own files on your computer. **No tokens, no account, nothing sent anywhere.**
+  The one optional exception, off until you turn it on in the settings: a daily look-up of the latest version
+  numbers at the public npm registry.
   The page is served to your own computer only.
 
 ## You need

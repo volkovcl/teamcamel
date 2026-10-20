@@ -76,6 +76,34 @@ READING THE PAGE
 - Click a session's name to open that session in its app. This works for
   sessions on the computer you are at.
 - The page refreshes itself every 15 seconds.
+- Under each computer's name: the Claude Code and Codex versions it runs.
+  Green: the latest. Grey: not the latest. Red: may be outdated, that is
+  behind a big version (for Claude Code the first two numbers, such as 2.1;
+  for Codex, which is still at 0.x, four releases or more, about a month).
+  Hover over a version to see the latest one.
+
+
+SETTINGS
+
+The gear at the top left opens the settings. They apply either to all your
+computers or only to the computer you are at, in every browser on it; you
+choose at the top of the panel. Both are kept in the shared TeamCamel folder.
+
+- Computers: show or hide each one, and choose their order. The first one
+  shown fills the left column.
+- Show: sessions of Claude, Codex or both, and their versions; computers by
+  operating system (macOS, Windows, Linux).
+- Look up the latest versions online, once a day: off until you turn it on.
+  The page then asks the public npm registry, where Claude Code and Codex are
+  published, for their latest version numbers; nothing about you or your
+  sessions is sent. While it is off, the latest version seen on your
+  computers counts as latest.
+- Colors: background, awaits input, working, completed. "Reset colors"
+  brings back the usual ones.
+- When a session starts needing you: a pop-up notice, a sound, a blinking
+  tab title, in any combination ("Try it" shows what you chose). They work
+  while the page is open in a browser tab, also when the tab is in the
+  background.
 
 
 OTHER COMMANDS
@@ -93,7 +121,10 @@ TESTING NOTES
 
 - It runs daily on macOS and has been run on Linux. On Windows nobody has run
   it yet: if you are on Windows, you are the first.
-- New in this version: "working in background". If a session shows as
+- New in this version: the gear at the top left (settings), and the
+  versions of Claude Code and Codex under each computer's name. If you turn
+  on notices, please say whether they reach you.
+- Also new lately: "working in background". If a session shows as
   completed while something it started is still running, or as working
   after that work has ended, please say so.
 - Double-clicking web/index.html shows the setup steps. If you set up from

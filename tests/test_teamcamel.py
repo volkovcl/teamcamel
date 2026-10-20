@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request as urllib_request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -564,6 +565,97 @@ try:
     rows = tc.process_table()
     ok(rows is not None and any(pid == os.getpid() for pid, _, _ in rows), "process table of this computer read")
 
+    print("versions of Claude Code and Codex")
+    restore()
+    home = tmp / "ver-home"
+    platform("mac" if REAL["MACOS"] else "linux", home)
+    ok(tc.version_key("codex-cli 0.162.0-alpha.17.2") == (0, 162, 0) and tc.version_key("2.1") == (2, 1, 0)
+       and tc.version_key("none") is None, "version numbers read from version texts")
+    ok(tc.newest_version(["2.1.99", "2.1.299", None, "2.0.300", "junk"]) == "2.1.299", "newest of several, by number not by text")
+    real_which, real_cmd, real_app = tc.shutil.which, tc.command_version, tc.CODEX_APP_CLI
+    tc.shutil.which = lambda name: None      # a computer with no claude or codex command and no Codex app
+    tc.CODEX_APP_CLI = ()
+    try:
+        tc._version_cache.clear()
+        ok(tc.claude_code_version([{"version": "2.1.290"}, {"version": "2.1.301"}]) == "2.1.301",
+           "Claude Code: the newest its running sessions use")
+        for v in ("2.1.288", "2.1.302"):
+            (tc.desktop_roots()[0] / "claude-code" / v).mkdir(parents=True)
+        ok(tc.claude_code_version([]) == "2.1.302", "no running session: the newest the desktop app holds")
+        rollout = home / "rollout.jsonl"
+        write(rollout, '{"type":"session_meta","payload":{"id":"t1","cli_version":"0.163.0","originator":"Codex Desktop"}}\n')
+        real_threads = tc.codex_threads
+        tc.codex_threads = lambda: [{"id": "t1", "rollout_path": str(rollout), "updated_at_ms": now}]
+        tc._version_cache.clear()
+        ok(tc.codex_version() == "0.163.0", "Codex: the version its newest thread was run with")
+        write(rollout, '{"type":"session_meta","payload":{"id":"t1","cli_version":"0.124.0-alpha.2"}}\n')
+        tc.shutil.which = lambda name: "/usr/local/bin/codex" if name == "codex" else None
+        tc.command_version = lambda exe: "0.163.0"
+        tc._version_cache.clear()
+        ok(tc.codex_version() == "0.163.0", "Codex updated since its last thread: the installed version counts")
+        tc.shutil.which, tc.command_version = (lambda name: None), real_cmd
+        tc.codex_threads = lambda: []
+        tc._version_cache.clear()
+        ok(tc.codex_version() is None, "no Codex: no Codex version")
+        tc.codex_threads = real_threads
+    finally:
+        tc.shutil.which, tc.command_version, tc.CODEX_APP_CLI = real_which, real_cmd, real_app
+        tc._version_cache.clear()
+
+    print("shared settings")
+    restore()
+    tc.STATE = tmp / "settings-state"
+    ok(tc.clean_settings({"order": ["a", 3], "apps": {"claude": False, "x": True}, "colors": {"bg": "#112233", "attn": "red"},
+                          "notify": {"popup": True, "sound": "yes"}, "evil": "<script>", "online": "yes"})
+       == {"order": ["a"], "apps": {"claude": False}, "colors": {"bg": "#112233"}, "notify": {"popup": True}},
+       "settings cleaned: unknown keys and wrong kinds dropped")
+    ok(tc.shared_settings() is None, "no shared settings yet")
+    node = tc.Node()
+    server = tc.PageServer(("127.0.0.1", 0), tc.make_handler(node))
+    threading_mod = __import__("threading")
+    threading_mod.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_port
+    import http.client
+
+    def post(body, **headers):
+        h = {"Host": "127.0.0.1:%d" % port, "Content-Type": "application/json", "X-TeamCamel": "1",
+             "Origin": "http://127.0.0.1:%d" % port}
+        h.update({k.replace("_", "-"): v for k, v in headers.items()})
+        h = {k: v for k, v in h.items() if v is not None}
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("POST", "/api/settings", body=body, headers=h)
+        code = conn.getresponse().status
+        conn.close()
+        return code
+    try:
+        good = json.dumps({"order": ["primary"], "versions": False, "colors": {"bg": "#FFFFFF"}})
+        ok(post(good) == 200 and tc.shared_settings() == {"order": ["primary"], "versions": False, "colors": {"bg": "#FFFFFF"}},
+           "this computer's page saves settings for all computers")
+        ok(json.load(urllib_request.urlopen("http://127.0.0.1:%d/api/state" % port, timeout=5))["settings"]["order"] == ["primary"],
+           "shared settings sent with the page data")
+        before = (tc.STATE / tc.SETTINGS_SHARED).read_text()
+        ok(post(good, Origin="https://some-web-site.example") == 403, "another web site's page cannot change them")
+        ok(post(good, X_TeamCamel=None) == 403, "a request without TeamCamel's own header is refused")
+        ok(post(good, Host="attacker.example") == 403, "a request for another host name is refused")
+        ok(post("x" * (tc.SETTINGS_MAX + 1)) == 413, "an oversized request is refused")
+        ok(post("{ not json") == 400, "a malformed request is refused")
+        ok((tc.STATE / tc.SETTINGS_SHARED).read_text() == before, "refused requests changed nothing")
+        mine = json.dumps({"scope": "mine", "settings": {"notify": {"title": True}, "order": ["worker2"]}})
+        ok(post(mine) == 200 and tc.own_settings(node.name) == {"notify": {"title": True}, "order": ["worker2"]}
+           and tc.shared_settings()["order"] == ["primary"], "this computer's own settings kept apart from those for all")
+        state = json.load(urllib_request.urlopen("http://127.0.0.1:%d/api/state" % port, timeout=5))
+        ok(state["mySettings"]["notify"] == {"title": True} and state["settings"]["order"] == ["primary"],
+           "the page receives both, for every browser on the computer")
+        ok(state["settingsScopes"] is True, "the page is told this TeamCamel keeps own and shared settings apart")
+        ok(post(json.dumps({"scope": "shared", "settings": {"versions": True}})) == 200 and tc.own_settings(node.name) is None
+           and tc.shared_settings() == {"versions": True}, "choosing 'all my computers' drops this computer's own settings")
+        ok(post(json.dumps({"scope": "elsewhere", "settings": {}})) == 400, "an unknown scope is refused")
+        ok(post(json.dumps(["not", "an", "object"])) == 400, "a request that is not settings is refused")
+        ok(all(not p.name.startswith(tc.SETTINGS_SHARED) for p in tc.STATE.glob("*.json")),
+           "settings files are never taken for a computer's report")
+    finally:
+        server.shutdown(); server.server_close()
+
     print("the page")
     restore()
     html = (tc.WEB / "index.html").read_text(encoding="utf-8")
@@ -578,6 +670,10 @@ try:
        "the setup guide knows the same synced-folder names as the precheck")
     ok("sh precheck.sh" in html and "precheck.bat" in html and "python3 teamcamel.py --install-hook" in html,
        "the setup guide gives the README's check and install commands")
+    ok("class=\"panel\" id=\"settings\"" in html and "'X-TeamCamel': '1'" in html and "registry.npmjs.org" in html,
+       "settings panel present; shared settings saved with TeamCamel's header; newest versions from the npm registry")
+    ok(all(k in html for k in ("notify: { popup: false, sound: false, title: false }", "online: false")),
+       "out of the box: no notices and no online look-up")
 
     print("other nodes' files")
     restore()

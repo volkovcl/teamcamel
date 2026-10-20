@@ -4,6 +4,66 @@ TeamCamel change log
 Newest version first.
 
 
+Version 2.1 - 2026-10-19
+------------------------
+
+Changed
+- Settings for "only this computer" now hold for every browser on it.
+  Before, they were kept in one browser, so settings made in Safari did not
+  show in Firefox. They are now kept in the shared TeamCamel folder, in a
+  file for that computer; settings made in 2.0 are carried over the first
+  time that browser opens the page.
+- Version colors renamed, since what counts as a big version is a matter of
+  opinion: latest (green), not the latest (grey), may be outdated (red).
+- Settings, "Show": "Sessions:" (Claude, Codex) with the versions beneath
+  it, then "OS(es):" (macOS, Windows, Linux).
+
+Fixed
+- "Try it" did not blink the tab title while the page was in view. It now
+  blinks for a few seconds. A real notice blinks whenever the page is not
+  the window in use, and stops when you come back to it.
+
+
+Version 2.0 - 2026-10-19
+------------------------
+
+New
+- Versions. Under each computer's name: the Claude Code and Codex versions
+  it runs. Green: the newest. Grey: behind, within the same big version.
+  Red: behind a big version. For Claude Code a big version is its first two
+  numbers (2.1); Codex is still at 0.x and moves its second number almost
+  weekly, so it counts as behind a big version at four releases (about a
+  month). Hovering over a version shows the newest one. Codex counts at
+  its newest on the computer: the codex command, the copy inside the Codex
+  desktop app, or the version its sessions were run with.
+- Settings, behind a gear at the top left. They apply to all your computers
+  (kept in the shared TeamCamel folder) or only to the computer you are at
+  (kept in its browser), as you choose:
+  - which computers to show, and their order (the first one shown fills the
+    left column);
+  - Claude, Codex or both; computers by system (macOS, Windows, Linux);
+  - the versions, and whether to look up the newest ones online once a day;
+  - the colors of the page;
+  - how to be told when a session starts needing you: a pop-up notice, a
+    sound, a blinking tab title, in any combination.
+- --check reports the Claude Code and Codex versions.
+
+Privacy
+- The daily look-up of the newest versions is off until it is turned on in
+  the settings. It is made by the page, which asks the public npm registry
+  for the newest Claude Code and Codex version numbers; nothing about you or
+  your sessions is sent. While it is off, the newest version seen on your
+  computers counts as newest.
+- Only this computer's own page can save the shared settings: a request from
+  any other web page is refused.
+
+Tested
+- macOS and Linux: automated checks for the version rules, the settings and
+  their save (including requests from another web site, refused), and the
+  notices; the page tried live in a browser. Pop-up notices depend on the
+  browser's permission and were not tried on a real browser here.
+
+
 Version 1.9 - 2026-10-18
 ------------------------
 
