@@ -18,7 +18,8 @@
                                             tests and this packaging folder
 
 --public also writes packaging/HOW-TO-PUBLISH.md, the author's step-by-step guide, with the
-current version number filled in.
+current version number filled in, and dist/RELEASE-NOTES-<version>.md, the text for the release
+page, from packaging/release-notes.md (whose first line must name the version being built).
 
 Neither ever contains the state folder (this computer's own sessions) or the inputs
 folder. Everything written is checked afterwards: the list of files, the footer, the
@@ -44,7 +45,7 @@ CREDIT = re.compile(r'<span id="credit">.*?</span>')
 REPOSITORY = [
     "README.md", "LICENSE.txt", "CHANGELOG.txt", ".gitignore",
     "teamcamel.py", "precheck.sh", "precheck.bat", "web/index.html",
-    "docs/banner.svg", "docs/screenshot.png",
+    "docs/banner.svg", "docs/screenshot.png", "docs/settings.png",
     "logo/teamcamel-logo.svg", "logo/camel-m.svg", "logo/build_logo.py", "logo/outline.swift",
     "tests/test_teamcamel.py", "tests/linux_fixture.py", "tests/linux_e2e.sh",
     "packaging/make_package.py", "packaging/make_screenshot.py",
@@ -236,12 +237,24 @@ def main():
         path.unlink()
         shutil.rmtree(folder, ignore_errors=True)
         sys.exit("NOT built:\n  " + "\n  ".join(problems))
+    notes = (ROOT / "packaging" / "release-notes.md").read_text(encoding="utf-8")
+    first = notes.splitlines()[0] if notes.strip() else ""
+    if "TeamCamel %s:" % ver not in first:
+        problems.append("packaging/release-notes.md is not for %s (its first line: %r)" % (ver, first))
+    elif leaks([notes.encode("utf-8")]):
+        problems.append("private text in the release notes")
+    if problems:
+        path.unlink()
+        shutil.rmtree(folder, ignore_errors=True)
+        sys.exit("NOT built:\n  " + "\n  ".join(problems))
+    (dist / ("RELEASE-NOTES-%s.md" % ver)).write_text(notes, encoding="utf-8")
     guide = (ROOT / "packaging" / "HOW-TO-PUBLISH.template.md").read_text(encoding="utf-8")
     guide = guide.replace("{version}", ver).replace("{files}", str(len(REPOSITORY)))
     (ROOT / "packaging" / "HOW-TO-PUBLISH.md").write_text(guide, encoding="utf-8")
     report("TeamCamel %s public download" % ver, files, path)
     print("TeamCamel %s public repository folder" % ver)
     print("  -> %s  (%d files)" % (folder.relative_to(ROOT), len(REPOSITORY)))
+    print("release notes -> dist/RELEASE-NOTES-%s.md" % ver)
     print("checked: file lists, full footer, license terms, no private text, unpacked copy runs")
     print("your steps: packaging/HOW-TO-PUBLISH.md")
 

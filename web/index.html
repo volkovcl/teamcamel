@@ -16,7 +16,7 @@
   html, body { margin: 0; background: var(--bg); color: var(--ink); }
   body {
     font: 17px/1.35 -apple-system, system-ui, "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, sans-serif;
-    padding: 18px 16px 72px;   /* bottom clears the fixed footer */
+    padding: 18px 16px 72px 32px;   /* bottom clears the fixed footer; left leaves room for the arrows */
   }
   @media (min-width: 720px) { body { padding: 22px 40px 80px; } }
 
@@ -27,34 +27,58 @@
   .status { font-weight: 300; }
 
   .bar {
-    display: flex; flex-wrap: wrap; gap: 4px 18px; justify-content: flex-end;
-    font-size: 14px; font-weight: 300; color: var(--muted); margin-bottom: 18px;
+    display: flex; flex-wrap: wrap; gap: 4px 18px; justify-content: flex-end; align-items: center;
+    font-size: 14px; font-weight: 300; color: var(--muted); margin-bottom: 18px; padding-right: 14px;
   }
+  .bar .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; justify-content: flex-end; }
   .bar .attn { color: var(--attn); }
   .bar .work { color: var(--work); }
   .bar .err { color: var(--attn); font-weight: 500; margin-right: auto; }
 
+  /* One column per computer, side by side; more than fit scroll sideways. */
   .nodes {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 36px 64px; align-items: start;
+    display: flex; gap: 0 56px; align-items: flex-start; overflow-x: auto;
+    scroll-snap-type: x proximity; scrollbar-width: thin;
   }
+  .nodes > .node { flex: 1 0 320px; min-width: 0; scroll-snap-align: start; }
+
+  /* Arrows to sessions out of view: blue, working; red, needing you. Up and down in the left
+     gutter, side by side; left and right at the top, one above the other. */
+  .arrow { position: fixed; z-index: 5; width: 14px; height: 14px; padding: 0; border: 0; background: none;
+           cursor: pointer; animation: pulse 2s ease-in-out infinite; }
+  .arrow svg { display: block; width: 14px; height: 14px; fill: currentColor; }
+  .arrow.work { color: var(--work); }
+  .arrow.attn { color: var(--attn); }
+  .arrow.up.work, .arrow.down.work { left: 4px; }
+  .arrow.up.attn, .arrow.down.attn { left: 19px; }
+  .arrow.up { top: 70px; }
+  .arrow.down { bottom: 46px; }
+  .arrow.left { left: 62px; }
+  .arrow.right { right: 4px; }
+  .arrow.left.work, .arrow.right.work { top: 8px; }
+  .arrow.left.attn, .arrow.right.attn { top: 24px; }
+  @keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: .8; } }
+  @media (prefers-reduced-motion: reduce) { .arrow { animation: none; opacity: .6; } }
   .node.stale { opacity: .55; }
   .node h1 { font-size: 19px; margin: 0 0 4px; }
   .node h1 .upd { font-weight: 300; font-size: 16px; margin-left: 8px; white-space: nowrap; }
   .none { font-weight: 300; color: var(--muted); margin: 14px 0 0 18px; }
-  /* "on others": one line saying how fresh each node's report is */
-  .fresh {
-    display: flex; flex-wrap: wrap; gap: 2px 18px; margin: 2px 0 0 18px;
-    font-size: 14px; font-weight: 300; color: var(--muted);
-  }
 
-  .ws.stale { opacity: .55; }
   .ws h2 { font-size: 17px; margin: 22px 0 12px 18px; overflow-wrap: anywhere; }
-  .ws h2 .on { font-weight: 400; font-size: 15px; color: var(--muted); margin-left: 10px; white-space: nowrap; }
   /* says which program a session belongs to; shown when the page has sessions of both */
   .app { font-weight: 400; font-size: 12px; color: var(--muted); border: 1px solid var(--rule); border-radius: 4px;
-         padding: 0 5px 1px; margin-left: 8px; white-space: nowrap; vertical-align: 1px; }
+         padding: 0 5px 1px; margin-left: 8px; white-space: nowrap; vertical-align: 1px;
+         display: inline-block; }   /* inline-block: the name's hover underline does not run through the label */
   .s { margin: 0 0 14px 46px; overflow-wrap: anywhere; }
+  /* Archived, marked handled, or its folder deleted: grey, never needing you. */
+  .s.quiet { opacity: .55; }
+  .s.quiet .status { color: var(--muted) !important; }
+  .mark { font: inherit; font-size: 13px; line-height: 1; background: none; border: 1px solid var(--rule); border-radius: 4px;
+          padding: 1px 5px; margin-left: 8px; color: var(--muted); cursor: pointer; vertical-align: 1px; }
+  .mark:hover, .mark:focus-visible { color: var(--ink); border-color: var(--muted); }
+  .mark.box { width: 14px; height: 14px; padding: 0; background: #fff; border-color: var(--muted); border-radius: 3px;
+              vertical-align: -2px; }
+  .mark.box:hover, .mark.box:focus-visible { border-color: var(--ink); }
   .name { display: block; color: inherit; text-decoration: none; }
   a.name:hover { text-decoration: underline; }
   .status { color: var(--muted); }
@@ -85,15 +109,19 @@
   .chip.new { background: #C0DD97; color: #173404; }
   .chip.near { background: #D3D1C7; color: #2C2C2A; }
   .chip.old { background: #F7C1C1; color: #501313; }
-  .fresh .chip { font-size: 12px; }
+
+  /* A hint next to whatever the pointer rests on. */
+  .hint { position: fixed; z-index: 30; max-width: 300px; padding: 4px 8px; border-radius: 4px; background: var(--ink);
+          color: var(--bg); font-size: 13px; font-weight: 400; line-height: 1.35; pointer-events: none;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, .2); }
 
   /* The gear and the settings panel. */
-  .gear { font: inherit; font-size: 20px; line-height: 1; background: none; border: 0; padding: 0 4px; margin-right: auto;
+  .gear { font: inherit; font-size: 35px; line-height: 1; background: none; border: 0; padding: 0 4px; margin-right: auto;
           color: var(--muted); cursor: pointer; }
   .gear:hover, .gear:focus-visible { color: var(--ink); }
   .gear:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .panel { position: fixed; top: 44px; left: 12px; z-index: 10; width: min(380px, calc(100vw - 24px));
-           max-height: calc(100vh - 110px); overflow-y: auto; background: #fff; color: #15180E;
+  .panel { position: fixed; top: 62px; left: 12px; z-index: 10; width: min(380px, calc(100vw - 24px));
+           max-height: calc(100vh - 128px); overflow-y: auto; background: #fff; color: #15180E;
            border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px 14px; font-size: 15px; font-weight: 400;
            box-shadow: 0 6px 24px rgba(0,0,0,.12); }
   .panel h3 { font-size: 15px; font-weight: 700; margin: 14px 0 6px; }
@@ -110,6 +138,7 @@
   .panel .line { display: flex; flex-wrap: wrap; align-items: center; margin: 2px 0; }
   .panel .lead { font-weight: 500; margin-right: 10px; min-width: 70px; }
   .panel .sub { margin: 0 0 6px 24px; }
+  .panel select { font: inherit; font-size: 14px; }
 
   /* Opened as a file (double-clicked) instead of at TeamCamel's address: the setup guide. */
   .guide { display: block; max-width: 780px; }
@@ -134,19 +163,36 @@
 <body>
 <div class="bar" id="bar"></div>
 <aside class="panel" id="settings" hidden aria-label="Settings"></aside>
+<div class="hint" id="hint" hidden role="tooltip"></div>
 <main class="nodes" id="nodes"></main>
 <footer class="foot"><svg class="logo" viewBox="54 522 1146 146" role="img" aria-label="TeamCamel"><title>TeamCamel</title><path class="letters" d="M158.54 542.47L115.39 542.47L115.39 666.37L98.96 666.37L98.96 542.47L55.81 542.47L55.81 527.82L158.54 527.82ZM178.93 527.82L254.34 527.82L254.34 542.47L195.35 542.47L195.35 587.79L249.39 587.79L249.39 602.44L195.35 602.44L195.35 651.72L255.33 651.72L255.33 666.37L178.93 666.37ZM350.93 627.97L299.86 627.97L286.01 666.37L269.78 666.37L322.23 525.64L329.75 525.64L382.40 666.37L365.18 666.37ZM305.20 613.72L345.98 613.72L330.54 571.56L325.59 550.58L325.39 550.58L320.45 571.96Z"/><path class="camel" d="M600.05,540.99c-9.66,1.28-10.76-3.67-11.8-4.52s-13.52-11.96-20.51.99c0,0-7.24.22-4.28,7.49-5.17,7.95.39,16.17-10.28,19.16-14.77,0-6.63-39.16-37.24-39.16-28.46-.64-18.4,28.25-31.03,27.82-14.12-.21-12.41-28.03-31.67-28.25-27.39.64-16.48,17.76-34.45,31.03-11.31,11.86-16.59,36.05-17.84,47.12-9.01,12.29-4.84,20.82-4.84,20.82,0,0,6.62-6.67,7.73-19.58.35-2.93,5.27-17.21,5.93-18.28.66-1.07,4.08-5.62,4.71-5.35.63.27-.35,4.98-.21,8.77s1.85,6.68,1.95,9.73c1.89,9.72-5.6,20.6-6.42,25.68-.27,3.13.64,5.14.64,5.14,3.08,7.79-2.72,25.67-.21,31.89,0,0-.14,1.46,0,2.14.14.68.2.99.64,1.5s.9.84,1.71,1.07c.81.23,22.93.09,23.33,0,.39-.09.66-.13.86-.43.2-.3.43-1.75.21-3-.21-1.25-.9-2.5-1.5-3.42s-.65-1.64-1.71-1.93c-2.45-.65-4.18-.28-4.49-2.35-6.57-14.6,2.37-26.14,4.71-30.6,1.55-2.78,2.38-4.48,3.21-6.63s.98-2.88,1.5-5.14c2.02-23.53,8.62-25.81,14.55-28.46q2.13-1.08,3.85-1.5c1.73-.41,2.45-.56,4.28-.43,1.83.13,3.49.5,5.14,1.28,1.64.78,2.17,1.24,3.42,2.57,1.26,1.33,1.74,2.05,2.57,3.85.83,1.8,1.38,3.93,1.93,6.85.54,2.92.5,3.87.64,6.85.14,2.97-.14,22.69,0,24.18.14,1.5.23,1.98.64,3.42.41,1.45,2.09,4.83,2.57,6.63.48,1.8.55,2.42.64,4.28.09,1.86-.1,6.58-.43,8.56-.33,1.99-.58,2.6-1.28,4.49-.7,1.89-1.99,3.45-2.35,5.14s-.23,3.43,0,4.07.68,1,1.07,1.28c.39.28.59.34,1.07.43.48.09,25.1-.03,25.47-.21.37-.19.52-.44.64-.86.12-.42.08-1.51-.21-2.57-.3-1.06-.71-2.14-1.71-3.42s-1.58-1.63-3-2.57c-1.41-.94-3.21-1.21-4.28-2.14-1.07-.93-1.4-1.45-1.93-2.78s-.75-3.14-.86-5.56c-.11-2.42.19-4.95.43-6.63.24-1.69.33-2.23.86-3.85.52-1.62,1.21-2.5,1.93-4.49.71-1.99,1.03-2.87,1.5-5.14.47-2.26.57-3.87.86-6.85.29-2.98.98-16.8,1.28-19.05.31-2.25.7-3.81,1.07-5.14.37-1.32.49-1.75,1.07-3,.58-1.24,1-2.24,2.14-3.64,1.14-1.4,2.61-2.81,4.28-3.85,1.67-1.04,2.36-1.25,4.28-1.71s2.69-.55,4.71-.43c2.02.12,3.54.54,4.92,1.07,1.38.53,1.85.78,3,1.71,1.14.93,2.41,2.44,3.21,3.64.8,1.19.98,1.65,1.5,3,.52,1.35.72,2.16,1.07,3.85.35,1.69.6,3.51.86,6.21.26,2.7.94,20.85,1.28,23.11.34,2.26.52,2.99,1.28,5.14.77,2.15,2.72,4.97,3.42,7.28.7,2.31.76,3.14.86,5.56.1,2.42.14,5.32-.64,9.2-.78,3.89-3.09,8.69-3.21,9.42-.12.72-.13.99,0,1.71.13.72.17,1.12.64,1.71.47.59,1.01,1.01,1.93,1.28.92.28,24.56.23,25.04,0s.67-.54.86-1.07c.19-.53.1-.87,0-1.5-.1-.63-.38-1.97-1.07-3.21-.69-1.24-1.03-1.68-2.14-2.57-1.11-.89-4.44-2.15-5.35-2.78s-1.34-.98-1.93-1.71-7.99-50.41,10.88-55.97c1.27-.49,7.07-2.13,11.59-7.26,7.25-4.83,7.43-20.47,7.26-21.74-.17-1.27-.24-4.74.01-5.06s13.86-.71,17.52-4.12c.79.19,4.68,3.84,8.35,3.21,1.99,1.24,7.71-5.69,3.88-11.1,0,0-.25-10.52-10.49-10.3Z"/><path class="letters" d="M718.43 660.63Q712.49 665.18 703.38 666.96Q694.28 668.75 683.99 668.75Q671.52 668.75 660.63 664.49Q649.74 660.23 641.63 651.53Q633.51 642.82 628.76 629.26Q624.01 615.70 624.01 597.09Q624.01 577.70 629.26 564.14Q634.50 550.58 643.11 541.97Q651.72 533.36 662.41 529.40Q673.10 525.44 684.18 525.44Q696.06 525.44 703.58 526.73Q711.10 528.02 716.45 530.19L712.49 544.64Q702.99 540.09 685.37 540.09Q677.26 540.09 669.34 543.06Q661.42 546.03 655.19 552.76Q648.95 559.49 645.19 570.37Q641.43 581.26 641.43 597.09Q641.43 611.35 644.99 622.03Q648.56 632.72 654.79 639.85Q661.03 646.97 669.44 650.54Q677.85 654.10 687.75 654.10Q696.65 654.10 703.29 652.32Q709.92 650.54 714.47 647.76ZM803.14 627.97L752.07 627.97L738.22 666.37L721.99 666.37L774.44 525.64L781.96 525.64L834.61 666.37L817.39 666.37ZM757.42 613.72L798.19 613.72L782.75 571.56L777.81 550.58L777.61 550.58L772.66 571.96ZM959.51 573.34L961.48 552.56L960.50 552.56L952.97 571.56L916.95 634.11L912.00 634.11L873.80 571.36L866.68 552.56L865.69 552.56L868.46 573.14L868.46 666.37L853.02 666.37L853.02 527.82L865.29 527.82L908.64 598.68L915.17 614.12L915.56 614.12L921.70 598.28L963.07 527.82L975.93 527.82L975.93 666.37L959.51 666.37ZM1009.58 527.82L1084.99 527.82L1084.99 542.47L1026.01 542.47L1026.01 587.79L1080.04 587.79L1080.04 602.44L1026.01 602.44L1026.01 651.72L1085.98 651.72L1085.98 666.37L1009.58 666.37ZM1197.62 666.37L1115.67 666.37L1115.67 527.82L1132.10 527.82L1132.10 651.72L1197.62 651.72Z"/></svg><span id="credit"> © 2026, Aleksandr A. Volkov</span><span id="ver"></span></footer>
 
 <script>
 const STALE_FACTOR = 2.4;   // a node is "not reporting" after this many missed heartbeats
-const RANK = s => s.state === 'input' ? 0 : (s.state === 'interrupted' && s.attention) ? 1
+// Grey and never needing you: archived, marked handled, or its folder deleted.
+const quiet = s => Boolean(s.archived || s.handled || s.folder === 'deleted');
+const RANK = s => quiet(s) ? 3 : s.state === 'input' ? 0 : (s.state === 'interrupted' && s.attention) ? 1
                 : s.state === 'working' ? 2 : 3;
+const FOLDER_WORDS = { deleted: 'folder deleted', missing: 'folder not found' };   // a moved folder is simply followed
 
 let data = null, failed = false, timer = null, pollMs = 15000, pageStamp = null;
 let bothApps = false;       // Claude and Codex sessions are both on the page: label each session
 let view = null;            // the settings the page was last drawn with
 let opened = new Set();
 try { opened = new Set(JSON.parse(localStorage.getItem('teamcamel.open') || '[]')); } catch (e) {}
+
+// A help message shown when pointing at something, unless the settings turn help messages off.
+// Shown by the page itself (see "Hints" below), at once rather than after the browser's own delay.
+function tip(node, text) {
+  if ((view || settings()).tips) node.dataset.tip = text;   // view: the settings the page is being drawn with
+  return node;
+}
+
+// Information shown when pointing at something (which computer, which version): always shown.
+function info(node, text) {
+  node.dataset.tip = text;
+  return node;
+}
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -172,30 +218,54 @@ function statusText(s, now) {
   }
   if (s.state === 'working') return 'working' + (s.detail ? ' ' + s.detail : '') + (t ? '  · ' + t : '');   // e.g. in background (blender)
   if (s.state === 'interrupted') return (s.detail || 'interrupted') + (t ? '  · ' + t + ' ago' : '');
+  if (s.archived) return 'archived' + (t ? '  · ' + t + ' ago' : '');
   return 'completed' + (t ? '  · ' + t + ' ago' : '');
 }
 
-function sessionEl(s, local, now) {
-  const box = el('div', 's ' + s.state + (s.attention ? ' attention' : ''));
+function sessionEl(s, p, now) {
+  const local = p.local;
+  const box = el('div', 's ' + s.state + (s.attention ? ' attention' : '') + (quiet(s) ? ' quiet' : ''));
   let name;
   const app = s.app === 'codex' ? 'Codex' : 'Claude';
   if (local && s.link) {
     name = el('a', 'name', s.title);
     name.href = s.link;
-    name.title = 'Open in ' + app;
+    tip(name, 'Open in ' + app);
   } else {
     name = el('span', 'name', s.title);
   }
   if (bothApps) name.append(el('span', 'app', app));
-  box.append(name, el('div', 'status', statusText(s, now)));
+  const status = el('div', 'status', statusText(s, now) + (s.handled ? '  · handled' : '') +
+                                     (s.folder ? '  · ' + FOLDER_WORDS[s.folder] : ''));
+  // Needing you: an empty square to tick once handled (it turns grey until it does something new);
+  // on a handled one, the arrow undoes it.
+  if ((s.attention || s.handled) && data.handled) {
+    const b = s.handled ? el('button', 'mark', '↺') : el('button', 'mark box');
+    b.type = 'button';
+    if (!s.handled) b.setAttribute('aria-label', 'Mark if handled');
+    tip(b, s.handled ? 'Not handled after all: it needs you again' : 'Mark if handled');
+    b.addEventListener('click', () => markHandled(p.node.node, s.id, s.handled ? null : s.since));
+    status.append(b);
+  }
+  box.append(name, status);
   return box;
 }
 
-// p: the prepared node this workspace is on; tagged: name that node in the heading.
-function wsEl(p, ws, now, tagged) {
-  const box = el('section', 'ws' + (tagged && p.stale ? ' stale' : ''));
+async function markHandled(node, id, since) {
+  const key = node + '/' + id;
+  if (since === null) delete data.handled[key]; else data.handled[key] = since;
+  render();
+  try {
+    const r = await fetch('/api/handled', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TeamCamel': '1' },
+                                            body: JSON.stringify({ node, id, since }) });
+    if (r.ok) { data.handled = await r.json(); render(); }
+  } catch (e) {}
+}
+
+// p: the prepared node this workspace is on.
+function wsEl(p, ws, now) {
+  const box = el('section', 'ws');
   const h = el('h2', '', 'ws ' + ws.name);
-  if (tagged) h.append(el('span', 'on', 'on ' + p.node.node));
   box.append(h);
   // Shown: everything that needs you, everything still working, the newest completed one.
   const shown = [], rest = [];
@@ -205,16 +275,16 @@ function wsEl(p, ws, now, tagged) {
     else if (!completedShown) { shown.push(s); completedShown = true; }
     else rest.push(s);
   }
-  for (const s of shown) box.append(sessionEl(s, p.local, now));
+  for (const s of shown) box.append(sessionEl(s, p, now));
   if (rest.length) {
     const key = p.node.node + '/' + ws.name;
     const more = el('button', 'more', '. . .');
     const drawer = el('div', 'rest');
-    for (const s of rest) drawer.append(sessionEl(s, p.local, now));
+    for (const s of rest) drawer.append(sessionEl(s, p, now));
     const set = isOpen => {
       drawer.hidden = !isOpen;
       more.setAttribute('aria-expanded', String(isOpen));
-      more.title = (isOpen ? 'Hide ' : 'Show ') + rest.length + ' more';
+      tip(more, (isOpen ? 'Hide ' : 'Show ') + rest.length + ' more');
     };
     set(opened.has(key));
     more.addEventListener('click', () => {
@@ -254,7 +324,11 @@ function byUrgency(a, b) {
 function prep(node, now) {
   const local = node.node === data.self;
   const stale = !local && now - node.generatedAt > data.heartbeatSec * 1000 * STALE_FACTOR;
-  const wss = groupByWs(node.sessions);
+  // Archived ones only if the settings show them; handled ones no longer need you.
+  const marks = data.handled || {};
+  const sessions = node.sessions.filter(x => !x.archived || !view || view.archived)
+    .map(x => x.attention && marks[node.node + '/' + x.id] === x.since ? Object.assign({}, x, { attention: false, handled: true }) : x);
+  const wss = groupByWs(sessions);
   return {
     node, local, stale, wss,
     attention: wss.reduce((n, w) => n + w.attention, 0),
@@ -274,38 +348,15 @@ function nodeColumn(p, now) {
   h.append(el('span', 'upd', p.stale
     ? '[not reporting since ' + p.at + ', ' + p.ago + ' ago]'
     : '[updated: ' + p.at + ', ' + p.ago + ' ago]'));
-  h.title = about(p.node);
+  info(h, about(p.node));
   col.append(h);
   const apps = view && view.versions ? appsEl(p.node, view) : null;
   if (apps) col.append(apps);
   if (!p.wss.length) col.append(el('div', 'none', 'no sessions'));
-  for (const ws of p.wss) col.append(wsEl(p, ws, now, false));
+  for (const ws of p.wss) col.append(wsEl(p, ws, now));
   return col;
 }
 
-// Several other nodes share one column: their workspaces are interleaved by urgency,
-// each heading saying which node it is on. A node that stopped reporting sinks to the bottom.
-function othersColumn(ps, now) {
-  const col = el('section', 'node');
-  const attention = ps.reduce((n, p) => n + (p.stale ? 0 : p.attention), 0);
-  col.append(el('h1', '', 'on others (' + attention + ')'));
-  const fresh = el('div', 'fresh');
-  for (const p of ps) {
-    const item = el('span', '', p.node.node + (p.node.os ? ' (' + p.node.os + ')' : '') + (p.stale
-      ? ': not reporting since ' + p.at : ': updated ' + p.ago + ' ago'));
-    item.title = about(p.node);
-    const apps = view && view.versions ? appsEl(p.node, view, 'versions') : null;
-    if (apps) item.append(' ', apps);
-    fresh.append(item);
-  }
-  col.append(fresh);
-  const groups = [];
-  for (const p of ps) for (const ws of p.wss) groups.push({ p, ws });
-  groups.sort((a, b) => a.p.stale - b.p.stale || byUrgency(a.ws, b.ws));
-  if (!groups.length) col.append(el('div', 'none', 'no sessions'));
-  for (const g of groups) col.append(wsEl(g.p, g.ws, now, true));
-  return col;
-}
 
 // ---- Settings ---------------------------------------------------------------------------------
 // Either this computer's own or the ones for all computers; teamcamel.py keeps both in the shared
@@ -316,9 +367,14 @@ const DEFAULTS = {
   apps: { claude: true, codex: true },
   systems: { macOS: true, Windows: true, Linux: true },
   versions: true, online: false,
+  archived: true,                    // sessions archived in Claude or Codex: shown grey (true) or left out
+  tips: true,                        // help messages when pointing at things
+  refresh: 15,                       // seconds between status reads, on the computers these settings are for
   colors: { bg: '#E6EECF', attn: '#9A2B14', work: '#1553B5', muted: '#586050' },
   notify: { popup: false, sound: false, title: false },
 };
+const REFRESH = [[5, '5 seconds'], [10, '10 seconds'], [15, '15 seconds (usual)'], [30, '30 seconds'],
+                 [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes']];   // as REFRESH_CHOICES in teamcamel.py
 const MINE = 'teamcamel.settings';       // where 2.0 kept this computer's settings, in one browser only
 const LAST = 'teamcamel.lastSettings';   // the last settings drawn with: for the first moment, before the page data
 
@@ -328,7 +384,8 @@ function complete(s) {
   for (const k of ['order', 'hidden']) if (Array.isArray(s[k])) out[k] = s[k].filter(x => typeof x === 'string');
   for (const k of ['apps', 'systems', 'colors', 'notify'])
     if (s[k] && typeof s[k] === 'object') for (const n in out[k]) if (typeof s[k][n] === typeof out[k][n]) out[k][n] = s[k][n];
-  for (const k of ['versions', 'online']) if (typeof s[k] === 'boolean') out[k] = s[k];
+  for (const k of ['versions', 'online', 'archived', 'tips']) if (typeof s[k] === 'boolean') out[k] = s[k];
+  if (REFRESH.some(([sec]) => sec === s.refresh)) out.refresh = s.refresh;
   return out;
 }
 
@@ -446,9 +503,9 @@ function appsEl(node, s, cls) {
     const newest = newestOf(app, s), mark = versionMark(app, v, newest);
     const shown = (/\d+\.\d+(?:\.\d+)?/.exec(v) || [v])[0];
     const chip = el('span', 'chip ' + mark, shown);
-    chip.title = v + (mark === 'new' ? ': the latest' : mark === 'near' ? ': not the latest, ' + newest + ' is'
+    info(chip, v + (mark === 'new' ? ': the latest' : mark === 'near' ? ': not the latest, ' + newest + ' is'
                       : ': may be outdated, ' + newest + ' is the latest') +
-      (s.online && online ? ' (published version, checked ' + age(Date.now() - online.at) + ' ago)' : ' (latest seen on your computers)');
+      (s.online && online ? ' (published version, checked ' + age(Date.now() - online.at) + ' ago)' : ' (latest seen on your computers)'));
     const item = el('span', '', label);
     item.append(chip);
     box.append(item);
@@ -537,7 +594,7 @@ function buildPanel() {
   const s = settings(), where = scope();
   const change = fn => { const t = settings(); fn(t); return save(t); };
   const close = el('button', 'close', '×');
-  close.type = 'button'; close.title = 'Close'; close.addEventListener('click', closePanel);
+  close.type = 'button'; tip(close, 'Close'); close.addEventListener('click', closePanel);
   panel.replaceChildren(close);
 
   panel.append(el('h3', '', 'Settings apply to'));
@@ -554,7 +611,7 @@ function buildPanel() {
 
   if (data && data.nodes.length > 1) {
     panel.append(el('h3', '', 'Computers'));
-    panel.append(el('p', 'note', 'The first one shown fills the left column; the rest share the right one.'));
+    panel.append(el('p', 'note', 'Each computer has its own column, left to right in this order.'));
     const names = ordered(data.nodes, s).map(n => n.node);
     names.forEach((name, i) => {
       const row = el('div', 'row');
@@ -563,7 +620,7 @@ function buildPanel() {
       }));
       const who = el('span', 'who', name + (name === data.self ? ' (this computer)' : ''));
       const move = (dir, text) => {
-        const b = el('button', '', text); b.type = 'button'; b.title = dir < 0 ? 'Move up' : 'Move down';
+        const b = el('button', '', text); b.type = 'button'; tip(b, dir < 0 ? 'Move up' : 'Move down');
         b.disabled = (dir < 0 && i === 0) || (dir > 0 && i === names.length - 1);
         b.addEventListener('click', () => change(t => {
           const list = names.slice(); [list[i], list[i + dir]] = [list[i + dir], list[i]]; t.order = list;
@@ -581,7 +638,9 @@ function buildPanel() {
                   toggle('Claude', s.apps.claude, on => change(t => { t.apps.claude = on; })),
                   toggle('Codex', s.apps.codex, on => change(t => { t.apps.codex = on; })));
   const versions = el('div', 'sub');
-  versions.append(toggle('Versions of Claude and Codex', s.versions, on => change(t => { t.versions = on; })),
+  versions.append(toggle('Archived sessions, in grey', s.archived, on => change(t => { t.archived = on; })),
+    el('div'),
+    toggle('Versions of Claude and Codex', s.versions, on => change(t => { t.versions = on; })),
     el('div'),
     toggle('Look up the latest versions online, once a day', s.online, on => {
       change(t => { t.online = on; }); if (on) lookUpNewest();
@@ -596,7 +655,25 @@ function buildPanel() {
   systems.append(el('span', 'lead', 'OS(es):'));
   for (const sys of ['macOS', 'Windows', 'Linux'])
     systems.append(toggle(sys, s.systems[sys], on => change(t => { t.systems[sys] = on; })));
-  panel.append(sessions, versions, systems);
+  const help = el('div', 'line');
+  help.append(el('span', 'lead', 'Help:'),
+              toggle('Messages when pointing at things', s.tips, on => change(t => { t.tips = on; }).then(buildPanel)));
+  panel.append(sessions, versions, systems, help);
+
+  panel.append(el('h3', '', 'Refresh'));
+  const every = el('div', 'line'), pick = el('select');
+  for (const [sec, label] of REFRESH) {
+    const o = el('option', '', label); o.value = String(sec); o.selected = sec === s.refresh; pick.append(o);
+  }
+  pick.addEventListener('change', () => {
+    const sec = Number(pick.value);
+    change(t => { t.refresh = sec; });
+    pollMs = sec * 1000; schedule();      // the page follows at once; TeamCamel within a second
+  });
+  every.append(el('span', 'lead', 'Statuses every'), pick);
+  panel.append(every, el('p', 'note', 'How often TeamCamel reads the sessions, and this page updates, on the computers ' +
+    'these settings are for (see the top). Other computers\u2019 statuses come through the shared folder, at most every ' +
+    '30 seconds. Faster uses a little more of the computer.'));
 
   panel.append(el('h3', '', 'Colors'));
   const colors = el('div', 'colors');
@@ -654,18 +731,20 @@ document.addEventListener('click', e => {
 
 function render() {
   const bar = document.getElementById('bar'), main = document.getElementById('nodes');
+  const s = settings();
+  if (data) view = s;          // first, so that everything below is drawn with the settings in force
   bar.replaceChildren();
   const gear = el('button', 'gear', '⚙');
-  gear.type = 'button'; gear.title = 'Settings'; gear.setAttribute('aria-label', 'Settings');
+  gear.type = 'button'; tip(gear, 'Settings'); gear.setAttribute('aria-label', 'Settings');
   gear.addEventListener('click', () => document.getElementById('settings').hidden ? openPanel() : closePanel());
   bar.append(gear);
   if (failed) bar.append(el('span', 'err', 'TeamCamel collector is not answering on this computer'));
-  bar.append(el('span', 'attn', 'awaits input / interrupted'), el('span', 'work', 'working'),
-             el('span', '', 'completed'));
-  const s = settings();
+  const legend = tip(el('span', 'legend'), 'Legend: the colors of the statuses');
+  legend.append(el('span', 'attn', 'awaits input / interrupted'), el('span', 'work', 'working'),
+                el('span', '', 'completed'));
+  bar.append(legend);
   applyColors(s.colors);
   if (!data) return;
-  view = s;
   try { localStorage.setItem(LAST, JSON.stringify(s)); } catch (e) {}
 
   const now = Date.now();
@@ -676,17 +755,83 @@ function render() {
   bothApps = all.some(x => x.app === 'codex') && all.some(x => x.app !== 'codex');
   const ps = nodes.map(node => prep(node, now));
   const total = ps.reduce((n, p) => n + (p.stale ? 0 : p.attention), 0);
-  // Left: the first computer in the order (this one, unless chosen otherwise). Right: the next
-  // one, or all the others together.
-  const cols = ps.slice(0, 1).map(p => nodeColumn(p, now));
-  const others = ps.slice(1);
-  if (others.length === 1) cols.push(nodeColumn(others[0], now));
-  else if (others.length > 1) cols.push(othersColumn(others, now));
+  // One column per computer, in the chosen order (this one first, unless chosen otherwise).
+  const cols = ps.map(p => nodeColumn(p, now));
   if (!ps.length) cols.push(el('div', 'none', 'Every computer is hidden by the settings (the gear, top left).'));
   main.replaceChildren(...cols);
   titleText = (total ? '(' + total + ') ' : '') + 'TeamCamel';
   if (!blink) document.title = titleText;
   watch(ps, s);
+  arrowsSoon();
+}
+
+// ---- Arrows to sessions out of view ----------------------------------------------------------
+
+const ARROW_SHAPES = { up: '7,2 13,12 1,12', down: '1,2 13,2 7,12', left: '2,7 12,1 12,13', right: '12,7 2,1 2,13' };
+const ARROW_WORDS = { up: 'above', down: 'below', left: 'to the left', right: 'to the right' };
+const arrows = {}, targets = {};
+
+function makeArrows() {
+  for (const dir of Object.keys(ARROW_SHAPES)) for (const kind of ['work', 'attn']) {
+    const b = el('button', 'arrow ' + dir + ' ' + kind);
+    b.type = 'button'; b.hidden = true;
+    b.dataset.help = (kind === 'attn' ? 'Sessions needing you ' : 'Working sessions ') + ARROW_WORDS[dir] + ': click to go there';
+    b.setAttribute('aria-label', b.dataset.help);
+    b.innerHTML = '<svg viewBox="0 0 14 14" aria-hidden="true"><polygon points="' + ARROW_SHAPES[dir] + '"/></svg>';
+    b.addEventListener('click', () => goTo(targets[dir + kind]));
+    document.body.append(b);
+    arrows[dir + kind] = b;
+  }
+}
+
+// Bring a session into view: its computer's column to the left edge of the row, the session
+// itself to the middle of the window. The page and the row of columns are scrolled separately.
+function goTo(t) {
+  if (!t) return;
+  const main = document.getElementById('nodes'), col = t.closest('section.node');
+  const box = main.getBoundingClientRect(), c = col.getBoundingClientRect();
+  if (c.left < box.left || c.right > box.right)
+    main.scrollTo({ left: main.scrollLeft + c.left - box.left, behavior: 'smooth' });
+  const r = t.getBoundingClientRect();
+  window.scrollTo({ top: window.scrollY + r.top - (window.innerHeight - r.height) / 2, behavior: 'smooth' });
+}
+
+// For each direction and kind, the nearest session out of view, or none.
+function updateArrows() {
+  const main = document.getElementById('nodes');
+  if (!main || !Object.keys(arrows).length) return;
+  const vw = document.documentElement.clientWidth, vh = window.innerHeight;
+  const footer = document.querySelector('.foot').getBoundingClientRect().height;
+  const box = main.getBoundingClientRect();
+  const left = Math.max(box.left, 0), right = Math.min(box.right, vw);
+  const best = {};
+  for (const [kind, sel] of [['work', '.s.working'], ['attn', '.s.attention']]) {
+    for (const x of main.querySelectorAll(sel)) {
+      const r = x.getBoundingClientRect();
+      if (!r.width) continue;                                   // folded away
+      // Out of view when its middle is: a session cut off at an edge, a word or two showing, counts.
+      const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+      let dir = null, gap = 0;
+      if (cx < left) { dir = 'left'; gap = left - cx; }
+      else if (cx > right) { dir = 'right'; gap = cx - right; }
+      else if (cy < 0) { dir = 'up'; gap = -cy; }
+      else if (cy > vh - footer) { dir = 'down'; gap = cy - vh; }
+      if (dir && (!best[dir + kind] || gap < best[dir + kind].gap)) best[dir + kind] = { x, gap };
+    }
+  }
+  for (const key of Object.keys(arrows)) {
+    targets[key] = best[key] ? best[key].x : null;
+    arrows[key].hidden = !best[key];
+    if (settings().tips) arrows[key].dataset.tip = arrows[key].dataset.help;
+    else delete arrows[key].dataset.tip;
+  }
+}
+
+let arrowsPending = false;
+function arrowsSoon() {
+  if (arrowsPending) return;
+  arrowsPending = true;
+  requestAnimationFrame(() => { arrowsPending = false; updateArrows(); });
 }
 
 async function refresh() {
@@ -885,9 +1030,43 @@ function guide() {
   check();
 }
 
+// ---- Hints -----------------------------------------------------------------------------------
+// One small box, shown next to whatever carries a data-tip a moment after the pointer reaches it.
+
+let hintTimer = null;
+
+function hideHint() {
+  clearTimeout(hintTimer);
+  document.getElementById('hint').hidden = true;
+}
+
+function showHint(target) {
+  const hint = document.getElementById('hint'), r = target.getBoundingClientRect();
+  hint.textContent = target.dataset.tip;
+  hint.hidden = false;
+  const w = hint.offsetWidth, h = hint.offsetHeight, vw = document.documentElement.clientWidth;
+  const below = r.bottom + 6 + h <= window.innerHeight - 40;          // keep clear of the footer
+  hint.style.left = Math.max(6, Math.min(r.left, vw - w - 6)) + 'px';
+  hint.style.top = (below ? r.bottom + 6 : Math.max(6, r.top - h - 6)) + 'px';
+}
+
+document.addEventListener('mouseover', e => {
+  const target = e.target.closest && e.target.closest('[data-tip]');
+  clearTimeout(hintTimer);
+  if (!target) return hideHint();
+  hintTimer = setTimeout(() => showHint(target), 120);
+});
+document.addEventListener('mousedown', hideHint);
+document.addEventListener('keydown', hideHint);
+window.addEventListener('scroll', hideHint, { passive: true, capture: true });
+
 if (location.protocol === 'file:') {
   guide();
 } else {
+  makeArrows();
+  window.addEventListener('scroll', arrowsSoon, { passive: true });
+  window.addEventListener('resize', arrowsSoon);
+  document.getElementById('nodes').addEventListener('scroll', arrowsSoon, { passive: true });
   document.addEventListener('visibilitychange', async () => {
     if (!document.hidden) await refresh();
     schedule();

@@ -64,10 +64,16 @@ READING THE PAGE
 
 - Red: the session awaits your input, or was interrupted. Blue: working.
   Gray: completed.
+- "Awaits input" also covers a turn that ended with a question to you in
+  plain words, as the Claude desktop app marks it, and a turn whose closing
+  card in the app asks you a question with answer buttons, until you answer
+  it. The question is shown.
 - "Working in background" means Claude's turn is over but work it started
   still runs: a command or a helper agent sent to the background, or a
-  program the session started that is still busy, such as a render. It turns
-  to completed when that work ends.
+  program the session started that is still busy, such as a render, a copy
+  or an upload. A program started again later, by you or by a script,
+  still counts: it belongs to the session whose commands named its script
+  in the last 14 days. It turns to completed when that work ends.
 - The number after your computer's name counts the sessions that need you. It
   also shows at the front of the browser tab's title.
 - ". . ." unfolds the older sessions of a workspace. A workspace ("ws") is
@@ -76,7 +82,18 @@ READING THE PAGE
   "Claude" or "Codex" label.
 - Click a session's name to open that session in its app. This works for
   sessions on the computer you are at.
-- The page refreshes itself every 15 seconds.
+- The page refreshes itself every 15 seconds; the settings can change that.
+- Grey sessions never count as needing you: sessions archived in Claude or
+  Codex, sessions whose folder was deleted, and sessions you marked
+  handled. A session needing you has a small empty square: tick it when you
+  have dealt with it, and the session turns grey until it does something
+  new (the arrow next to a handled one undoes it).
+- A session whose folder was renamed or moved simply carries on, under the
+  folder's new name; TeamCamel follows the folder (on a Mac).
+- Each computer has its own column. When more sessions or computers are on
+  the page than fit the window, small blinking arrows point to those out of
+  view: up and down on the left, left and right at the top. Blue: working
+  sessions that way; red: sessions needing you. Click one to go there.
 - Under each computer's name: the Claude Code and Codex versions it runs.
   Green: the latest. Grey: not the latest. Red: may be outdated, that is
   behind a big version (for Claude Code the first two numbers, such as 2.1;
@@ -90,15 +107,22 @@ The gear at the top left opens the settings. They apply either to all your
 computers or only to the computer you are at, in every browser on it; you
 choose at the top of the panel. Both are kept in the shared TeamCamel folder.
 
-- Computers: show or hide each one, and choose their order. The first one
-  shown fills the left column.
-- Show: sessions of Claude, Codex or both, and their versions; computers by
-  operating system (macOS, Windows, Linux).
+- Computers: show or hide each one, and choose their order, left to right.
+- Show: sessions of Claude, Codex or both, archived ones in grey or not at
+  all, and their versions; computers by operating system (macOS, Windows,
+  Linux).
 - Look up the latest versions online, once a day: off until you turn it on.
   The page then asks the public npm registry, where Claude Code and Codex are
   published, for their latest version numbers; nothing about you or your
   sessions is sent. While it is off, the latest version seen on your
   computers counts as latest.
+- Refresh: how often TeamCamel reads the sessions and the page updates,
+  from every 5 seconds to every 5 minutes (15 seconds unless changed).
+  Other computers' statuses come through the shared folder, at most every
+  30 seconds.
+- Help: short messages when pointing at things (the gear, a session's name,
+  the square, the legend at the top right). Turn them off once you know
+  the page.
 - Colors: background, awaits input, working, completed. "Reset colors"
   brings back the usual ones.
 - When a session starts needing you: a pop-up notice, a sound, a blinking

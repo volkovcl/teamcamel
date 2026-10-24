@@ -4,6 +4,183 @@ TeamCamel change log
 Newest version first.
 
 
+Version 2.9.2 - 2026-10-23
+--------------------------
+
+Fixed
+- A session whose turn ended with the Claude app's closing card asking you a
+  question, with answer buttons ("Add both warnings" / "Skip them"), showed
+  as completed. The app itself counts such a question as waiting on you only
+  when Claude marks it as blocking; one that "can wait" stays on screen all
+  the same. TeamCamel now reads the card from the session's transcript and
+  shows the session as awaiting input, with the question, until you answer
+  it (or mark the session handled).
+
+
+Version 2.9.1 - 2026-10-22
+--------------------------
+
+Fixed
+- A session that once ran a program by its path (such as uv or rclone) was
+  taken to own every later run of that program, including the connector
+  programs Claude starts. Only scripts and other files of the session's own
+  tie a program to it now, and nothing Claude Code or the Claude app's
+  launcher starts is tied this way (those carry the session's mark). A
+  script started again in the Claude app's Terminal panel still counts.
+
+
+Version 2.9 - 2026-10-22
+------------------------
+
+Changed
+- "Working in background" now also covers a program that lost the session's
+  mark: one started again later, by you, by a scheduled job or by a script,
+  such as an upload resumed after a pause. Such a program is tied to the
+  session whose own commands named its script or file within the last 14
+  days (the latest one to name it, when several did); what it starts belongs
+  to the same session. It counts while it is busy, as before.
+- --check and each computer's report say which programs were tied this way.
+
+
+Version 2.8.1 - 2026-10-22
+--------------------------
+
+Fixed
+- Work started by a long-lived session could be missed: the Claude app now
+  and then gives such a session a new internal id, keeping the earlier ones,
+  and a program started under an earlier id was not connected to the
+  session. It now is.
+
+New
+- Each computer's report lists the programs its sessions started that are
+  running, with their processor use and data moved, and --check shows them:
+  to see why one counts as working or not.
+
+
+Version 2.8 - 2026-10-22
+------------------------
+
+Changed
+- "Working in background" now also covers a program a session started that
+  copies or uploads: one moving data, on disk or over the network, hardly
+  uses the processor, so 2.7 took it for an idle leftover (an overnight
+  upload showed as completed). A program counts as working while it uses
+  the processor, or moves more than half a megabyte a minute; a pause of up
+  to two minutes does not end it. On a Mac disk and network are counted,
+  on Linux everything a program reads and writes, on Windows as before.
+  Uploading done by the Dropbox app itself, after a session copied files
+  into a Dropbox folder, is Dropbox's work and is not counted.
+- Hints when pointing at things now appear at once (after about a tenth of
+  a second) instead of after the browser's own delay of a second or more.
+  They are drawn by the page, in its colors.
+
+
+Version 2.7 - 2026-10-21
+------------------------
+
+Changed
+- Marking a session handled: an empty white square next to a session
+  needing you, to tick, in place of the check mark. Pointing at it says
+  "Mark if handled". Undoing (the arrow) is as before.
+
+New
+- Help messages when pointing at things: "Settings" on the gear, "Open in
+  Claude" (or Codex) on a session's name, "Legend" on the colored words at
+  the top right, and on the square, the ". . ." and the arrows.
+- Settings, "Help": turns these messages off, for those who know the page.
+  What a computer's name and a version number show when pointed at stays,
+  being information rather than help.
+
+
+Version 2.6.1 - 2026-10-21
+--------------------------
+
+Fixed
+- Pointing at a session's name underlined its "Claude" or "Codex" label too
+  (since labels came in, 1.7). Now only the name is underlined.
+
+
+Version 2.6 - 2026-10-21
+------------------------
+
+Fixed
+- A session whose turn ended with a question to you in plain words ("Take
+  batch 6 as recommended?") showed as completed: Claude Code reports such a
+  session idle. It now shows as awaits input, with the question. TeamCamel
+  reads it where the Claude desktop app keeps it, the end-of-turn wrap-up
+  and summary of each session, the way the app reads them; both are cleared
+  when you reply. As with an interrupted session, one left unanswered for
+  over 7 days, and no longer running, stops counting. Sessions started
+  from a terminal have no such record and are unchanged.
+
+
+Version 2.5 - 2026-10-21
+------------------------
+
+Changed
+- A session whose folder was renamed or moved now simply carries on: its
+  workspace shows under the folder's new name and TeamCamel follows the
+  folder at its new place from then on, also after a restart. 2.4 only
+  noted "folder moved or renamed". On a Mac, for folders TeamCamel has
+  seen in their place (every session folder since 2.4).
+- If the followed folder is gone and a folder of the original name exists
+  again, the original name is used again.
+
+
+Version 2.4 - 2026-10-21
+------------------------
+
+New
+- "Handled": a session needing you has a small check mark. Click it once
+  you have dealt with the session: it turns grey and stops counting as
+  needing you (no notices, no red arrow) until it does something new. The
+  arrow next to a handled session undoes it. The marks are kept in the
+  shared folder, so every computer's page shows them.
+- Archived sessions stay on the page in grey instead of leaving it: those
+  archived in Claude or in Codex. They never count as needing you, also
+  while still running. A setting under "Show" leaves them out instead.
+- A session whose working folder was deleted turns grey and stops counting
+  as needing you. A folder that was only moved or renamed is mentioned
+  ("folder moved or renamed") and the session keeps its state. On a Mac
+  TeamCamel tells the two apart by the folder's identity number, which it
+  notes while the folder is there; elsewhere, and for a folder it never
+  saw, a folder that is gone is only "folder not found", with no change.
+
+
+Version 2.3 - 2026-10-21
+------------------------
+
+Changed
+- One column per computer, side by side, in the order chosen in the
+  settings (this computer first unless chosen otherwise). Before, three or
+  more computers shared one column, "on others". When the columns do not
+  fit the window, the row scrolls sideways.
+
+New
+- Arrows to sessions out of view. Small, softly blinking arrows show that
+  working sessions (blue) or sessions needing you (red) are out of view:
+  up and down in a narrow margin on the left, left and right at the top.
+  When both point the same way they sit side by side (one above the other
+  at the top). They change as you scroll, and clicking one brings the
+  nearest such session into view.
+
+
+Version 2.2 - 2026-10-20
+------------------------
+
+New
+- Settings, "Refresh": how often TeamCamel reads the sessions and the page
+  updates, from every 5 seconds to every 5 minutes; 15 seconds as before
+  unless changed. Like every setting it applies to all your computers or
+  only to the one you are at, as chosen at the top of the panel, and takes
+  effect within a second. Other computers' statuses come through the shared
+  folder, at most every 30 seconds (or as rarely as their own refresh).
+- --check reports the refresh in force.
+
+Changed
+- The gear at the top left is 75% larger, easier to find and to hit.
+
+
 Version 2.1 - 2026-10-19
 ------------------------
 

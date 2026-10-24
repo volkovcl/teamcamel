@@ -167,8 +167,10 @@ try:
                                          "name": "Ended terminal job", "cwd": "/home/u/code/gamma", "status": "busy"})
     write(reg / "broken.json", "{ half written")
     got = {s["title"]: s for s in tc.collect()}
-    ok(set(got) == {"Waiting job", "Finished job", "Dropped job", "Pid reused by another program", "Terminal job", "Unknown start token"},
-       "sessions found: desktop, terminal; archived and ended ones left out")
+    ok(set(got) == {"Waiting job", "Finished job", "Dropped job", "Pid reused by another program", "Terminal job", "Unknown start token",
+                    "Archived"}, "sessions found: desktop, terminal, archived; ended terminal ones left out")
+    ok(got["Archived"].get("archived") and not got["Archived"]["attention"] and got["Archived"]["detail"] == "archived",
+       "an archived session is kept, grey")
     ok(got["Waiting job"]["state"] == "input" and got["Waiting job"]["detail"] == "permission prompt" and got["Waiting job"]["attention"]
        and got["Waiting job"]["ws"] == "alpha", "live desktop session awaiting input, ws from its folder")
     ok(got["Terminal job"]["state"] == "working" and got["Terminal job"]["ws"] == "gamma" and got["Terminal job"]["link"] is None,
@@ -401,7 +403,9 @@ try:
 
     tc.codex_running = lambda: True
     got = {s["title"]: s for s in tc.codex_sessions()}
-    ok(set(got) == {"Thread " + n for n in threads if n not in ("archived", "helper")}, "threads listed; archived and helper threads left out")
+    ok(set(got) == {"Thread " + n for n in threads if n != "helper"}, "threads listed, archived ones too; helper threads left out")
+    ok(got["Thread archived"].get("archived") and not got["Thread archived"]["attention"]
+       and got["Thread archived"]["detail"] == "archived", "an archived Codex thread is kept, grey")
     ok(all(s["app"] == "codex" and s["id"].startswith("codex-") for s in got.values()), "each marked as a Codex session")
     ok(got["Thread done"]["link"] == "codex://threads/00000000-aaaa-7bbb-8ccc-000000000000" and got["Thread busy"]["link"] is None,
        "a thread from the Codex desktop app gets a link that opens it there; one from the terminal command gets none")
@@ -565,6 +569,124 @@ try:
     rows = tc.process_table()
     ok(rows is not None and any(pid == os.getpid() for pid, _, _ in rows), "process table of this computer read")
 
+    print("copying and uploading count as working")
+    clock = [1000.0]
+    real_time, real_moved = tc.time.time, tc.bytes_moved
+    tc.time.time = lambda: clock[0]
+    moved = {}
+    tc.bytes_moved = lambda pids: {pid: moved[pid] for pid in pids if pid in moved}
+    tc._activity.clear()
+    try:
+        prog = lambda pid, cpu=0.0, since=1: {"pid": pid, "cpu": cpu, "since": since, "program": "rclone", "claude": 1, "session": "s"}
+        moved.update({11: 10_000_000, 12: 10_000_000})
+        ok(tc.busy_processes([prog(11), prog(12)]) == [], "first look: nothing to compare with yet")
+        clock[0] += 15; moved[11] += 2_000_000; moved[12] += 20_000
+        ok([p["pid"] for p in tc.busy_processes([prog(11), prog(12)])] == [11],
+           "a program moving 2 MB in 15 s counts as working, one trickling 20 KB does not")
+        clock[0] += 15
+        ok([p["pid"] for p in tc.busy_processes([prog(11), prog(12)])] == [11], "a short pause: still working")
+        clock[0] += tc.BUSY_GRACE
+        ok(tc.busy_processes([prog(11), prog(12)]) == [], "quiet for two minutes: no longer counted")
+        clock[0] += 15; moved[11] += 2_000_000
+        ok(tc.busy_processes([prog(11, since=2)]) == [], "the same process number, another program: starts afresh")
+        ok([p["pid"] for p in tc.busy_processes([prog(13, cpu=55.0)])] == [13], "busy on the processor: working at once")
+    finally:
+        tc.time.time, tc.bytes_moved = real_time, real_moved
+        tc._activity.clear()
+    writer = subprocess.Popen([sys.executable, "-c", "import os, time\n"
+                               "f = open(%r, 'wb')\n"
+                               "while True:\n    f.write(b'\\0' * 2097152); f.flush(); os.fsync(f.fileno()); time.sleep(0.3)" % str(tmp / "writer.bin")])
+    try:
+        time.sleep(1.5)
+        a1 = tc.bytes_moved([writer.pid]).get(writer.pid)
+        time.sleep(3)
+        a2 = tc.bytes_moved([writer.pid]).get(writer.pid)
+        ok(a1 is not None and a2 is not None and a2 - a1 > 2_000_000,
+           "a real program writing to disk with little processor use: its data moved is seen (%.1f MB in 3 s)"
+           % ((a2 - a1) / 1e6 if a1 is not None and a2 is not None else -1))
+    finally:
+        writer.kill()
+
+    print("programs a session set running, without its mark")
+    restore()
+    ok(tc.paths_in('cd "/Volumes/T7/Old PC Drive" && nohup /bin/bash /Volumes/T7/_rclone/run_uploads.sh t7 >> ~/up.log &')
+       >= {"/Volumes/T7/Old PC Drive", "/Volumes/T7/_rclone/run_uploads.sh", str(tc.HOME) + "/up.log"}
+       and not any(p.startswith("/bin/") for p in tc.paths_in("/bin/bash /usr/bin/rsync")),
+       "the user's own paths read from a command, quoted or not, with ~; system tools left out")
+    restore()
+    home = tmp / "named-home"
+    platform("mac" if REAL["MACOS"] else "linux", home)
+    script = tmp / "uploader.py"
+    script.write_text("import subprocess, time\nsubprocess.Popen(['sleep', '60'])\ntime.sleep(60)\n")
+    other = tmp / "unrelated.py"
+    other.write_text("import time\ntime.sleep(60)\n")
+    tool = tmp / "mytool"                         # a program file, like uv or rclone
+    tool.symlink_to(os.path.realpath(sys.executable))   # (a copy of a system program would not run on macOS)
+    launcher = tmp / "Claude.app/Contents/Helpers/disclaimer"     # what the Claude app starts programs with
+    panel = tmp / "Claude.app/Contents/Frameworks/Claude Helper.app/panel.py"   # its Terminal panel
+    for f in (launcher, panel):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("import subprocess, sys, time\nsubprocess.Popen([sys.executable, %r])\ntime.sleep(60)\n" % str(script))
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}        # no session's mark
+
+    def detached(*args):
+        """Start a program the way a resumed upload runs: on its own, not under any Claude (parent 1)."""
+        out = subprocess.run(["/bin/sh", "-c", 'nohup "$@" >/dev/null 2>&1 & echo $!', "sh"] + [str(a) for a in args],
+                             env=clean, capture_output=True, text=True).stdout
+        return int(out.strip())
+
+    started = []
+    try:
+        up = detached(sys.executable, script)
+        un = detached(sys.executable, other)
+        tl = detached(tool, "-c", "import time; time.sleep(61)")
+        started += [up, un, tl]
+        time.sleep(1.5)
+        lines = [{"type": "assistant", "timestamp": iso(now - 3600000), "message": {"content": [
+                     {"type": "tool_use", "name": "Write", "input": {"file_path": str(script), "content": "..."}}]}},
+                 {"type": "assistant", "timestamp": iso(now - 600000), "message": {"content": [
+                     {"type": "tool_use", "name": "Bash", "input": {"command": "nohup python3 '%s' &" % script}}]}},
+                 {"type": "assistant", "timestamp": iso(now - 500000), "message": {"content": [
+                     {"type": "tool_use", "name": "Bash", "input": {"command": "%s 1" % tool}}]}}]
+        write(home / ".claude/projects/p1/cliN-old.jsonl", "\n".join(json.dumps(x) for x in lines) + "\n")
+        desk = [{"sessionId": "local_N", "cliSessionId": "cliN", "priorCliSessionIds": ["cliN-old"],
+                 "title": "Uploads", "cwd": "/u/wp-up", "lastActivityAt": now - 600000}]
+        got = {p["pid"]: p for p in tc.named_programs([], desk)}
+        ok(up in got and got[up]["session"] == "cliN" and got[up]["program"] == "uploader.py",
+           "a program started without the session's mark, running a script the session named: the session's, under the script's name")
+        kids = [p for p in got.values() if p["program"] == "sleep"]
+        ok(kids and all(p["session"] == "cliN" for p in kids), "what that program started belongs to the same session")
+        ok(un not in got, "a program running a file no session named: nobody's")
+        ok(any(pid == tl for pid, _, _ in tc.command_lines()) and tl not in got,
+           "a program file the session once ran by its path (like uv): not the session's every later run of it")
+        ok(not any(p["pid"] == os.getpid() for p in got.values()), "TeamCamel itself: never")
+        ok(up not in {p["pid"] for p in tc.named_programs([{"pid": up, "sessionId": "cliZ"}], desk)},
+           "under a running Claude Code: left to the session's mark, not counted again")
+        by_app = detached(sys.executable, launcher)
+        in_panel = detached(sys.executable, panel)
+        started += [by_app, in_panel]
+        time.sleep(1.5)
+        rows = tc.command_lines()
+        kids_of = lambda pid: [c for c, pp, _ in rows if pp == pid]
+        got = {p["pid"]: p for p in tc.named_programs([], desk)}
+        ok(kids_of(by_app) and not any(k in got for k in kids_of(by_app)),
+           "the script started by the Claude app's launcher (as its connectors are): not counted")
+        ok(kids_of(in_panel) and all(k in got for k in kids_of(in_panel)),
+           "the script started again in the Claude app's Terminal panel: counted")
+        old = [dict(desk[0], lastActivityAt=now - 20 * 86400 * 1000)]
+        tc._named_cache.clear()
+        write(home / ".claude/projects/p1/cliN-old.jsonl", json.dumps(dict(lines[1], timestamp=iso(now - 20 * 86400 * 1000))) + "\n")
+        ok(up not in {p["pid"] for p in tc.named_programs([], old)}, "named more than 14 days ago: no longer tied")
+    finally:
+        for pid in started:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        subprocess.run(["pkill", "-f", str(script)], capture_output=True)
+        subprocess.run(["pkill", "-f", "^sleep 60$"], capture_output=True)
+        tc._named_cache.clear()
+
     print("versions of Claude Code and Codex")
     restore()
     home = tmp / "ver-home"
@@ -601,6 +723,140 @@ try:
     finally:
         tc.shutil.which, tc.command_version, tc.CODEX_APP_CLI = real_which, real_cmd, real_app
         tc._version_cache.clear()
+
+    print("finished sessions: archived, folder deleted; renamed and moved folders followed")
+    restore()
+    tc.STATE = tmp / "fate-state"
+    tc._folders = None
+    proj = tmp / "wp-alpha"
+    proj.mkdir()
+    old = str(proj)
+    ok(tc.follow_folder(old, {}) == (None, old), "a folder in its place: nothing to say")
+    proj.rename(tmp / "wp-alpha-2026")
+    renamed = os.path.realpath(str(tmp / "wp-alpha-2026"))     # the system reports real paths (/private/var for /var)
+    if REAL["MACOS"]:
+        ok(tc.follow_folder(old, {}) == (None, renamed), "folder renamed: followed to its new name, nothing to say")
+        e = tc.with_folder({"ws": "alpha", "attention": True}, old, {})
+        ok(e == {"ws": "alpha-2026", "attention": True}, "the session carries on under the new name, state unchanged")
+        (tmp / "elsewhere").mkdir()
+        (tmp / "wp-alpha-2026").rename(tmp / "elsewhere" / "wp-alpha-2026")
+        moved = os.path.realpath(str(tmp / "elsewhere" / "wp-alpha-2026"))
+        ok(tc.follow_folder(old, {}) == (None, moved), "then moved: followed there too")
+        tc.save_folder_ids(); tc._folders = None
+        ok(tc.follow_folder(old, {}) == (None, moved), "followed folders kept between restarts, in the shared folder")
+        shutil.rmtree(moved)
+        ok(tc.follow_folder(old, {})[0] == "deleted", "then deleted: 'deleted'")
+        proj.mkdir(); tc.follow_folder(str(proj), {})
+        tc._folders["ids"][str(proj)][0] += 1                    # as if the disk's number changed after a restart
+        proj.rmdir()
+        ok(tc.follow_folder(str(proj), {})[0] == "missing", "a number from another disk is not trusted: only 'not found'")
+    else:
+        ok(tc.follow_folder(old, {})[0] == "missing", "folder renamed: 'not found' (no lookup by number here)")
+    ok(tc.follow_folder(str(tmp / "never-seen"), {})[0] == "missing", "a folder never seen and not there: only 'not found'")
+    ok(tc._in_trash("/Users/x/.Trash/proj") and tc._in_trash("/Volumes/Disk/.Trashes/501/proj")
+       and not tc._in_trash("/Users/x/work/proj"), "the Trash told from other places")
+    e = tc.with_folder({"attention": True}, str(tmp / "never-seen"), {})
+    ok(e == {"attention": True, "folder": "missing"}, "folder not found: noted, still needing you")
+    seen = {str(tmp / "gone"): ("deleted", str(tmp / "gone"))}
+    ok(tc.with_folder({"attention": True}, str(tmp / "gone"), seen) == {"attention": False, "folder": "deleted"},
+       "folder deleted: no longer needing you")
+    tc._folders = None
+    write(tc.folder_ids_path(), {"/old/style": [1, 2]})        # as 2.4 kept them
+    ok(tc._folder_table() == {"ids": {"/old/style": [1, 2]}, "moved": {}}, "numbers noted by 2.4 still read")
+    home = tmp / "arch-home"
+    platform("mac" if REAL["MACOS"] else "linux", home)
+    tc.STATE = tmp / "fate-state"
+    store = home / ("Library/Application Support/Claude" if REAL["MACOS"] else ".config/Claude") / "claude-code-sessions/acct/org"
+    write(store / "local_Z.json", {"sessionId": "local_Z", "cliSessionId": "cliZ", "title": "Closed and archived",
+                                   "cwd": "/u/wp-old", "lastActivityAt": now - 90000, "isArchived": True})
+    z_pid = sleepers[0].pid
+    write(home / ".claude/sessions" / ("%d.json" % z_pid), {"pid": z_pid, "sessionId": "cliZ", "hostSessionId": "local_Z",
+                                                        "procStart": lstart(z_pid), "status": "waiting", "name": "Closed and archived"})
+    got = [s for s in tc.collect() if s["title"] == "Closed and archived"]
+    ok(len(got) == 1 and got[0]["archived"] and not got[0]["attention"] and got[0]["state"] == "completed"
+       and got[0]["detail"] == "archived", "archived in Claude: listed once, grey, never needing you, even while still running")
+
+    print("a finished turn that asks something of you")
+    restore()
+    ok(tc.turn_needs({"turnWrapUp": {"description": "x", "needsUser": "Take batch 6?"}}) == "Take batch 6?",
+       "the wrap-up's question")
+    ok(tc.turn_needs({"postTurnSummary": {"status_category": "blocked", "needs_action": "your choices"}}) == "your choices",
+       "no wrap-up: the turn summary's 'blocked' with what is needed")
+    ok(tc.turn_needs({"postTurnSummary": {"status_category": "need_input", "needs_action": ""}}) == "your reply",
+       "'need input' with nothing more said")
+    ok(tc.turn_needs({"turnWrapUp": {"description": "done"}, "postTurnSummary": {"status_category": "blocked"}}) is None,
+       "a wrap-up without a question means nothing is needed, whatever the summary says (as the Claude app reads it)")
+    ok(tc.turn_needs({"postTurnSummary": {"status_category": "completed"}}) is None and tc.turn_needs({}) is None,
+       "completed, or nothing kept: nothing needed")
+    ok(tc.short("a " * 60).endswith("…") and len(tc.short("a " * 60)) <= 70, "a long question shortened")
+    home = tmp / "ask-home"
+    platform("mac" if REAL["MACOS"] else "linux", home)
+    store = home / ("Library/Application Support/Claude" if REAL["MACOS"] else ".config/Claude") / "claude-code-sessions/acct/org"
+    done = {"type": "assistant", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+            "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Take batch 6 as recommended?"}]}}
+    for key, title, extra in (("Q", "Asks a question", {"turnWrapUp": {"description": "batch 5 done", "needsUser": "Take batch 6 as recommended?"},
+                                                        "lastTurnEdgeAt": now - 60000}),
+                              ("R", "Asked long ago", {"turnWrapUp": {"needsUser": "Which one?"}, "lastTurnEdgeAt": now - 9 * 86400 * 1000}),
+                              ("S", "Just finished", {"turnWrapUp": {"description": "all done"}, "lastTurnEdgeAt": now - 60000})):
+        write(store / ("local_%s.json" % key), dict({"sessionId": "local_" + key, "cliSessionId": "cli" + key, "title": title,
+                                                     "cwd": "/u/wp-review", "lastActivityAt": now - 60000}, **extra))
+        transcript(home / ".claude/projects/p1" / ("cli%s.jsonl" % key), done)
+    got = {s["title"]: s for s in tc.collect()}
+    ok(got["Asks a question"]["state"] == "input" and got["Asks a question"]["detail"] == "Take batch 6 as recommended?"
+       and got["Asks a question"]["attention"] and got["Asks a question"]["since"] == now - 60000,
+       "a turn that ended with a question: awaits input, with the question")
+    ok(got["Asked long ago"]["state"] == "completed", "a question left for over 7 days, session not running: no longer counted")
+    ok(got["Just finished"]["state"] == "completed", "a turn that ended without a question: completed")
+
+    # The Claude app's end-of-turn card: a recap, and a question with answer buttons.
+    def card_turn(key, card, reply="Shown in the next-step box. Your closing message is your answer to the user.",
+                  after=(), wrap=None, blocked_rec=False):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        recs = [{"type": "user", "timestamp": stamp, "message": {"content": "set up the case"}},
+                {"type": "assistant", "timestamp": stamp, "message": {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "tu_" + key, "name": "mcp__ccd_turn__wrap_up", "input": card}]}},
+                {"type": "user", "timestamp": stamp, "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "tu_" + key, "content": [{"type": "text", "text": reply}]}]}},
+                {"type": "assistant", "timestamp": stamp, "message": {"stop_reason": "end_turn", "content": [
+                    {"type": "text", "text": "The workspace is set up."}]}}] + list(after)
+        write(home / ".claude/projects/p1" / ("cli%s.jsonl" % key),
+              "\n".join(json.dumps(x, separators=(",", ":")) for x in recs) + "\n")
+        write(store / ("local_%s.json" % key), dict({"sessionId": "local_" + key, "cliSessionId": "cli" + key,
+                                                    "title": "Card " + key, "cwd": "/u/wp-cards",
+                                                    "lastActivityAt": now - 60000, "lastTurnEdgeAt": now - 60000},
+                                                   **({"turnWrapUp": wrap} if wrap else {})))
+
+    buttons = [{"label": "Add both warnings", "message": "Add both."}, {"label": "Skip them"}]
+    card_turn("C1", {"recap": "The workspace is set up.", "ask": "Add the firm's 2-day warnings?", "actions": buttons},
+              wrap={"description": "The workspace is set up."})
+    card_turn("C2", {"recap": "Done.", "ask": "Run the check now?", "blocked": True, "actions": buttons})
+    card_turn("C3", {"recap": "All done; nothing waits on you."}, reply="Nothing is pending, so the app draws no box.")
+    card_turn("C4", {"recap": "Done.", "ask": "Next?"}, reply="The app draws no box for this call; the recap is the session's status.")
+    later = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    card_turn("C5", {"recap": "Done.", "ask": "Add the warnings?", "actions": buttons},
+              after=[{"type": "user", "timestamp": later, "message": {"content": "Add both."}},
+                     {"type": "assistant", "timestamp": later, "message": {"stop_reason": "end_turn",
+                                                                            "content": [{"type": "text", "text": "Added."}]}}])
+    got = {s["title"]: s for s in tc.collect()}
+    ok(got["Card C1"]["state"] == "input" and got["Card C1"]["detail"] == "Add the firm's 2-day warnings?"
+       and got["Card C1"]["attention"],
+       "a turn that ended with the app's card asking a question (one that 'can wait'): awaits input, with the question")
+    ok(got["Card C2"]["state"] == "input" and got["Card C2"]["detail"] == "Run the check now?",
+       "the same card marked as blocking: awaits input")
+    ok(got["Card C3"]["state"] == "completed", "a card with only a recap, nothing asked: completed")
+    ok(got["Card C4"]["state"] == "completed", "a question the app did not draw a card for: completed")
+    ok(got["Card C5"]["state"] == "completed", "the card's question answered (a button or a reply): completed")
+    write(store / "local_U.json", {"sessionId": "local_U", "cliSessionId": "cliU-new", "priorCliSessionIds": ["cliU-old"],
+                                   "title": "Long upload", "cwd": "/u/wp-photos", "lastActivityAt": now - 60000})
+    transcript(home / ".claude/projects/p1" / "cliU-new.jsonl", done)
+    real_bw = tc.background_work
+    tc.background_work = lambda registry, desktop=None: {"cliU-old": ("in background (rclone)", now - 3600000)}
+    try:
+        u_got = {s["title"]: s for s in tc.collect()}["Long upload"]
+    finally:
+        tc.background_work = real_bw
+    ok(u_got["state"] == "working" and u_got["detail"] == "in background (rclone)",
+       "a program started under one of the session's earlier internal ids still counts as the session's work")
 
     print("shared settings")
     restore()
@@ -650,6 +906,34 @@ try:
         ok(post(json.dumps({"scope": "shared", "settings": {"versions": True}})) == 200 and tc.own_settings(node.name) is None
            and tc.shared_settings() == {"versions": True}, "choosing 'all my computers' drops this computer's own settings")
         ok(post(json.dumps({"scope": "elsewhere", "settings": {}})) == 400, "an unknown scope is refused")
+        ok(tc.clean_settings({"refresh": 60}) == {"refresh": 60} and tc.clean_settings({"refresh": 7}) == {}
+           and tc.clean_settings({"refresh": True}) == {} and tc.clean_settings({"refresh": "60"}) == {},
+           "refresh: only the offered intervals are kept")
+        ok(node.refresh_every() == tc.COLLECT_EVERY and node.merged()["pollSec"] == tc.COLLECT_EVERY,
+           "no refresh chosen: every 15 seconds, and the page polls as often")
+        post(json.dumps({"scope": "shared", "settings": {"refresh": 60}}))
+        ok(node.refresh_every() == 60 and node.merged()["pollSec"] == 60, "refresh chosen for all computers: followed")
+        post(json.dumps({"scope": "mine", "settings": {"refresh": 5}}))
+        ok(node.refresh_every() == 5, "this computer's own refresh comes before the one for all")
+        post(json.dumps({"scope": "mine", "settings": {"versions": True}}))
+        ok(node.refresh_every() == tc.COLLECT_EVERY, "own settings without a refresh: the usual 15 seconds, as the page shows")
+        post(json.dumps({"scope": "shared", "settings": {"versions": True}}))
+        def mark(body):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("POST", "/api/handled", body=json.dumps(body), headers={
+                "Host": "127.0.0.1:%d" % port, "Content-Type": "application/json", "X-TeamCamel": "1",
+                "Origin": "http://127.0.0.1:%d" % port})
+            code = conn.getresponse().status
+            conn.close()
+            return code
+        ok(mark({"node": "primary", "id": "local_A", "since": now}) == 200 and node.merged()["handled"] == {"primary/local_A": now},
+           "a session marked handled, kept for every computer's page")
+        ok(mark({"node": "primary", "id": "local_A", "since": None}) == 200 and node.merged()["handled"] == {},
+           "and unmarked again")
+        ok(mark({"node": "primary", "id": 5, "since": now}) == 400 and mark({"node": "primary", "id": "x", "since": "now"}) == 400,
+           "a malformed mark is refused")
+        ok(mark({"node": "primary", "id": "old", "since": now - 200 * 86400 * 1000}) == 200 and node.merged()["handled"] == {},
+           "marks older than 90 days are let go")
         ok(post(json.dumps(["not", "an", "object"])) == 400, "a request that is not settings is refused")
         ok(all(not p.name.startswith(tc.SETTINGS_SHARED) for p in tc.STATE.glob("*.json")),
            "settings files are never taken for a computer's report")
@@ -674,6 +958,16 @@ try:
        "settings panel present; shared settings saved with TeamCamel's header; newest versions from the npm registry")
     ok(all(k in html for k in ("notify: { popup: false, sound: false, title: false }", "online: false")),
        "out of the box: no notices and no online look-up")
+    ok('id="hint"' in html and "dataset.tip" in html and "node.title = text" not in html,
+       "hints are the page's own, shown at once, not the browser's delayed ones")
+    ok("'Mark if handled'" in html and "tips: true," in html and "function tip(" in html and "'Legend: the colors of the statuses'" in html,
+       "an empty square to mark a session handled; help messages, which the settings can turn off")
+    ok("function markHandled" in html and "archived: true," in html and "'/api/handled'" in html,
+       "the page can mark a session handled and shows archived sessions in grey")
+    ok("function updateArrows" in html and "othersColumn" not in html and ".nodes > .node { flex: 1 0 320px" in html,
+       "one column per computer, with arrows to sessions out of view")
+    ok("refresh: 15," in html and all("[%d, '" % sec in html for sec in tc.REFRESH_CHOICES),
+       "the page offers the same refresh intervals as TeamCamel, 15 seconds by default")
 
     print("other nodes' files")
     restore()
@@ -688,6 +982,7 @@ try:
     write(tc.STATE / "notes.json", ["not", "a", "node"])
     ok(len(node.merged()["nodes"]) == 2 and node.merged()["version"] == tc.__version__, "unrelated file ignored; version reported")
     snap = node.snapshot
+    ok(isinstance(snap.get("programs"), list), "the report lists what programs sessions started are doing")
     ok(snap["version"] == tc.__version__ and snap["os"] == tc.os_label() and snap["schema"] == 1,
        "snapshot carries version and system: %s, %s" % (snap["version"], snap["os"]))
 finally:
