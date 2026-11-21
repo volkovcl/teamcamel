@@ -5,6 +5,7 @@
 
     docs/screenshot.png   the page: three computers, each in its own column
     docs/settings.png     the same page with the settings open
+    docs/stopping.png     one column, with the box for stopping a program that may be stuck
 
 A copy of the program runs in a temporary folder with a pretend home folder, so
 neither this computer's sessions nor its state folder take part. Every session,
@@ -26,6 +27,7 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PORT = 2266
 MIN = 60000
 SIZE = "1400,900"
+STOP_CROP = (1880, 135, 920, 885)    # x, y, width, height in the picture (twice the window's size)
 WORK = None            # the made-up work folders, created in the temporary folder
 # Version numbers are made up too: one computer up to date, one a little behind, one far behind,
 # so that the version labels show all three colors.
@@ -148,21 +150,24 @@ def other_computers(state, version):
     now = int(time.time() * 1000)
     handled = {}
 
-    def s(node, i, title, ws, st, detail, mins, attn, app=None, archived=False, mark=False):
+    def s(node, i, title, ws, st, detail, mins, attn, app=None, archived=False, mark=False, programs=None):
         d = {"id": "%s-%d" % (node, i), "title": title, "ws": ws, "state": st, "detail": detail,
              "since": now - mins * MIN, "attention": attn, "live": not archived, "link": None}
         if app:
             d["app"] = app
+        if programs:
+            d["programs"] = programs
         if archived:
             d["archived"] = True
         if mark:          # ticked "handled" by the user: grey, no longer counted
             handled["%s/%s" % (node, d["id"])] = d["since"]
         return d
 
-    def computer(node, host, system, ago, sessions):
+    def computer(node, host, system, ago, sessions, stop_from_others=False):
         write(state / ("%s.json" % node), {
             "schema": 1, "node": node, "host": host, "os": system, "version": version,
-            "apps": {"claude": CLAUDE[node], "codex": CODEX[node]}, "generatedAt": now - ago, "sessions": sessions})
+            "apps": {"claude": CLAUDE[node], "codex": CODEX[node]}, "generatedAt": now - ago, "sessions": sessions,
+            "stopFromOthers": stop_from_others})
 
     computer("office-pc", "OFFICE-PC", "Windows", 25000, [
         s("office-pc", 1, "Add the export button", "client-portal", "input", "input needed", 11, True),
@@ -172,10 +177,16 @@ def other_computers(state, version):
         s("office-pc", 5, "Fix the invoice numbering", "data-cleanup", "interrupted", "connection interrupted", 95, True,
           mark=True),
         s("office-pc", 6, "Convert all dates to one format", "data-cleanup", "completed", "", 1450, False)])
+    # A program a session left running, busy on the processor and doing nothing else for 90 minutes.
+    thumbs = {"pid": 48211, "since": now - 130 * MIN, "name": "make_thumbs.py", "cpu": 99, "stuck": True, "quietSec": 5400,
+              "cmd": "python3 make_thumbs.py --size 400 ~/Pictures/archive"}
     computer("travel-laptop", "travel-laptop", "Linux", 40000, [
+        s("travel-laptop", 4, "Make thumbnails for the scans", "photo-archive", "stuck", "make_thumbs.py", 130, True,
+          programs=[thumbs]),
         s("travel-laptop", 1, "Back up the photo library", "photo-archive", "working", "in background (rclone)", 20, False),
         s("travel-laptop", 2, "Plan the conference trip", "travel", "completed", "", 600, False),
-        s("travel-laptop", 3, "Notes from the client call", "travel", "completed", "archived", 9000, False, archived=True)])
+        s("travel-laptop", 3, "Notes from the client call", "travel", "completed", "archived", 9000, False, archived=True)],
+             stop_from_others=True)
     write(state / "teamcamel.handled", handled)
 
 
@@ -214,7 +225,7 @@ def main():
             try:
                 with urllib.request.urlopen("http://127.0.0.1:%d/api/state" % PORT, timeout=1) as resp:
                     names = [s["title"] for n in json.load(resp)["nodes"] for s in n["sessions"]]
-                if len(names) >= 19:
+                if len(names) >= 20:
                     break
             except OSError:
                 pass
@@ -228,7 +239,17 @@ def main():
         (app / "web" / "index.html").write_text(page.replace("</body>", opener, 1), encoding="utf-8")
         shutil.rmtree(str(tmp / "chrome"), ignore_errors=True)
         shoot(tmp, ROOT / "docs" / "settings.png", url)
-        print("docs/screenshot.png and docs/settings.png retaken at version %s with %d made-up sessions"
+        # The stop box, opened the same way, cut down to the column it is in.
+        opener = "<script>setTimeout(() => document.querySelector('.stop').click(), 1500)</script></body>"
+        (app / "web" / "index.html").write_text(page.replace("</body>", opener, 1), encoding="utf-8")
+        shutil.rmtree(str(tmp / "chrome"), ignore_errors=True)
+        whole = tmp / "stopping-whole.png"
+        shoot(tmp, whole, url)
+        out = ROOT / "docs" / "stopping.png"
+        subprocess.run(["sips", "--cropToHeightWidth", str(STOP_CROP[3]), str(STOP_CROP[2]),
+                        "--cropOffset", str(STOP_CROP[1]), str(STOP_CROP[0]), str(whole), "--out", str(out)],
+                       capture_output=True, check=True)
+        print("docs/screenshot.png, docs/settings.png and docs/stopping.png retaken at version %s with %d made-up sessions"
               % (version, len(names)))
     finally:
         if server:

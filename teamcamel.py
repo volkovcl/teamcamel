@@ -18,9 +18,21 @@ any of them shows the sessions of all of them.
     python3 teamcamel.py --ensure    start that in the background unless it already runs
                                      (what the hook calls; silent)
     python3 teamcamel.py --check     report what TeamCamel finds on this computer
-    python3 teamcamel.py --stop      stop it (it starts again with the next Claude session)
-    python3 teamcamel.py --uninstall take this copy out of Claude's start-up and stop it;
-                                     the folder itself stays for you to delete
+    python3 teamcamel.py --start-at-login
+                                     optional, only if you want it: also start TeamCamel
+                                     when you log in, and again if it stops, by adding a
+                                     login item (macOS: a LaunchAgent in
+                                     ~/Library/LaunchAgents, which starts a small helper
+                                     app built on the Mac, in ~/Library/Application
+                                     Support/TeamCamel; Linux: a systemd user service;
+                                     Windows: a file in the Startup folder)
+    python3 teamcamel.py --no-start-at-login
+                                     take that login item (and helper app) away again
+    python3 teamcamel.py --stop      stop it (it starts again with the next Claude session,
+                                     or the next login if the login item is there)
+    python3 teamcamel.py --uninstall take this copy out of Claude's start-up (and the login
+                                     item, if any) and stop it; the folder stays for you
+                                     to delete
     python3 teamcamel.py --no-serve  collector only (this node reports, nobody views here)
     python3 teamcamel.py --once      print this node's snapshot and exit
     python3 teamcamel.py --version
@@ -81,7 +93,7 @@ try:
 except ImportError:   # a Python built without it: Codex threads are then read from their files
     sqlite3 = None
 
-__version__ = "2.9.2"
+__version__ = "2.9.11"
 
 WINDOWS = sys.platform.startswith("win")
 MACOS = sys.platform == "darwin"
@@ -198,6 +210,49 @@ def ws_name(cwd):
     path = cwd.replace("\\", "/").split("/.claude/worktrees/")[0].rstrip("/")
     base = path.rsplit("/", 1)[-1] or path
     return re.sub(r"^(z_)?(wp|ws)[-_]", r"\1", base) or base
+
+
+def _folder_key(path, cache):
+    """A session folder as one string: the same folder however it was reached (through a link,
+    or from a worktree inside it)."""
+    if not path:
+        return None
+    if path not in cache:
+        plain = path.replace("\\", "/").split("/.claude/worktrees/")[0].rstrip("/")
+        try:
+            real = os.path.realpath(plain)
+        except (OSError, ValueError):
+            real = plain
+        cache[path] = real.replace("\\", "/")
+    return cache[path]
+
+
+def tell_workspaces_apart(sessions):
+    """Two different folders with the same name (two cases each kept in a folder "workspace")
+    are two workspaces, not one. Their labels then also name the folder each sits in, as in
+    "_Kian/workspace" and "_Grinberg/workspace", going further up only if that is not enough.
+    Takes each session's private "_dir" (its folder) away."""
+    folders, cache = {}, {}
+    for s in sessions:
+        key = _folder_key(s.pop("_dir", None), cache)
+        if key:
+            folders.setdefault(s["ws"], {}).setdefault(key, []).append(s)
+    for label, by_folder in folders.items():
+        if len(by_folder) < 2:
+            continue
+        above = {key: key.split("/")[:-1] for key in by_folder}
+        for depth in range(1, max(len(a) for a in above.values()) + 1):
+            tails = {key: "/".join(a[-depth:]).lstrip("/") for key, a in above.items()}
+            if len(set(tails.values())) == len(tails):
+                break
+        else:
+            # The same folder above them all (wp-abc and abc side by side): their own names differ.
+            tails = {key: "/".join(a[-1:]).lstrip("/") + "/" + key.rsplit("/", 1)[-1] for key, a in above.items()}
+            label = ""
+        for key, ss in by_folder.items():
+            name = (tails[key] + "/" + label).strip("/") if label else tails[key].strip("/")
+            for s in ss:
+                s["ws"] = name or s["ws"]
 
 
 def read_json(path):
@@ -810,8 +865,13 @@ BUSY_CPU = 10.0                # % of one core above which a program a session s
 BUSY_BYTES_PER_MIN = 512 * 1024   # data moved per minute (disk, network) above which it counts as working
 BUSY_GRACE = 120               # seconds it still counts after its last activity: a pause is not the end
 AGENT_HOURS = 12               # a background helper agent with no end notice stops counting after this
+STUCK_CPU = 50.0               # % of one core: a program this busy that reads, writes and sends nothing
+STUCK_AFTER = 3600             # for this many seconds "may be stuck"
+STOP_WAIT = 5                  # seconds to wait for a program asked to stop before saying it still runs
+STOP_REQUEST_MINUTES = 10      # a stop asked for from another computer is carried out only while this fresh
 
 _ENV_PID = re.compile(r"(?:^|\s)CLAUDE_PID=(\d+)(?=\s|$)")
+_TEAMCAMEL = re.compile(r"(?:^|[/ ])teamcamel\.py(?=\s|$)")
 _ENV_SESSION = re.compile(r"(?:^|\s)CLAUDE_CODE_SESSION_ID=([0-9A-Za-z-]+)(?=\s|$)")
 _TASK_ID = re.compile(r"<task-id>([^<]+)</task-id>")
 _TASK_STATUS = re.compile(r"<status>([^<]+)</status>")
@@ -851,6 +911,23 @@ def process_table():
     return rows
 
 
+# The Claude desktop app's own programs (the app, its helpers, its launcher), by where they run from.
+_CLAUDE_APP = re.compile(r"^[^ ]*/Claude\.app/Contents/")
+
+
+def _started_by_claude_app(pid, claude, parent, text):
+    """True for the Claude desktop app's own programs and what they start, unless the session's own
+    Claude Code (whose mark the program carries) stands between them and the app."""
+    seen = 0
+    while pid and seen < 64:
+        if pid == claude:
+            return False
+        if _CLAUDE_APP.match(text.get(pid, "")):
+            return True
+        pid, seen = parent.get(pid), seen + 1
+    return False
+
+
 def marked_processes(table):
     """Programs started by Claude sessions' commands, running now:
     [{"pid", "claude", "session", "cpu", "program", "since"}]."""
@@ -858,10 +935,17 @@ def marked_processes(table):
     marks = {}
     for pid, ppid, text in table or []:
         pid_m = _ENV_PID.search(text)
-        # Not TeamCamel itself: when a Claude hook started it, it carries the marks too.
-        if pid_m and pid != me and ppid != me:
+        # Not TeamCamel itself (nor another copy of it running): when a Claude hook started it, it
+        # carries the marks too.
+        if pid_m and pid != me and ppid != me and not _TEAMCAMEL.search(text):
             sess_m = _ENV_SESSION.search(text)
             marks[pid] = (int(pid_m.group(1)), sess_m.group(1) if sess_m else None)
+    # Not the Claude app: when a session's command quits and reopens it, the app and everything it
+    # starts carry that session's mark from then on, though none of it is the session's work.
+    parent = {pid: ppid for pid, ppid, _ in table or []}
+    text = {pid: t for pid, _, t in table or []}
+    for pid in [p for p in marks if _started_by_claude_app(p, marks[p][0], parent, text)]:
+        del marks[pid]
     found = []
     for pid, (cpu, since, program) in describe(list(marks)).items():
         claude, session = marks[pid]
@@ -1100,8 +1184,46 @@ def named_programs(registry, desktop, skip=()):
     return found
 
 
-_activity = {}               # {(pid, start): {"bytes": moved so far, "at": when measured, "last": last busy, "rate"}}
+_activity = {}               # {(pid, start): {"bytes": moved so far, "at": when measured, "last": last busy, "rate",
+                             #                 "alive": last sign of work (data moved, or the processor let go)}}
+_activity_seed = None        # "alive" times kept over a restart of TeamCamel, read once
+_activity_saved = 0.0
 _programs_seen = []          # programs sessions started that run now, with what they do: for the report
+_stoppable = {}              # {(pid, start): {"name", "session"}}: the programs the page shows, the only ones it may stop
+_names = {}                  # {(pid, start): the name shown}, from the last look
+
+
+def _activity_file():
+    return log_path().with_name("teamcamel.activity.json")       # this computer's own, not shared
+
+
+def _load_activity_seed():
+    global _activity_seed
+    if _activity_seed is None:
+        try:
+            d = read_json(_activity_file())
+            _activity_seed = {k: v for k, v in d.items() if type(v) in (int, float)} if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            _activity_seed = {}
+    return _activity_seed
+
+
+def _save_activity(now):
+    """Keeps the "alive" times in a small local file, at most once a minute, so that a restart of
+    TeamCamel (a new version, say) does not start the "may be stuck" clocks over."""
+    global _activity_saved
+    if now - _activity_saved < 60:
+        return
+    _activity_saved = now
+    data = {"%d:%d" % key: r["alive"] for key, r in _activity.items() if "alive" in r}
+    try:
+        path = _activity_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+    except OSError:
+        pass
 
 
 def _rusage_lib():
@@ -1158,21 +1280,29 @@ def busy_processes(procs):
     """The programs among procs that are working: busy on the processor, or moving data at more than
     BUSY_BYTES_PER_MIN since the last look, or either within the last BUSY_GRACE seconds."""
     now = time.time()
-    moved = bytes_moved([p["pid"] for p in procs if p["cpu"] < BUSY_CPU])
+    moved = bytes_moved([p["pid"] for p in procs])
+    seed = _load_activity_seed()
     busy, seen = [], set()
     for p in procs:
         key = (p["pid"], p["since"])            # a reused process number is another program
         seen.add(key)
         before = _activity.get(key) or {}
         active = p["cpu"] >= BUSY_CPU
-        record = {"at": now, "last": before.get("last", 0)}
+        record = {"at": now, "last": before.get("last", 0),
+                  "alive": before.get("alive") or seed.get("%d:%d" % key) or now}
         total = moved.get(p["pid"])
-        if total is not None:
+        if total is None:
+            record["alive"] = now                # what it moves cannot be read: never judged stuck
+        else:
             record["bytes"] = total
             if before.get("bytes") is not None and now > before["at"]:
                 rate = max(0, total - before["bytes"]) * 60.0 / (now - before["at"])
                 record["rate"] = rate
                 active = active or rate >= BUSY_BYTES_PER_MIN
+                if total != before["bytes"]:
+                    record["alive"] = now
+        if p["cpu"] < STUCK_CPU:
+            record["alive"] = now                # not spinning: waiting, or done
         if active:
             record["last"] = now
         _activity[key] = record
@@ -1180,7 +1310,106 @@ def busy_processes(procs):
             busy.append(p)
     for key in [k for k in _activity if k not in seen]:
         del _activity[key]
+    _save_activity(now)
     return busy
+
+
+def quiet_seconds(p):
+    """How long a program has used the processor nonstop while reading, writing and sending nothing;
+    0 when it showed a sign of work at the last look, or when that cannot be told."""
+    r = _activity.get((p["pid"], p["since"])) or {}
+    if "bytes" not in r or p["cpu"] < STUCK_CPU:
+        return 0
+    return max(0, int(time.time() - r.get("alive", time.time())))
+
+
+def may_be_stuck(p):
+    return quiet_seconds(p) >= STUCK_AFTER
+
+
+_SCRIPT = re.compile(r"\.(py|pyw|js|mjs|cjs|ts|sh|bash|zsh|rb|pl|php|lua|R|r|jl)$")
+
+
+def program_name(program, command):
+    """The name to show for a program: for one that runs a script (Python, node, a shell...), the
+    script: 'qa3_billscan.py' rather than 'Python'."""
+    low = program.lower()
+    if not (program in _RUNNERS or low.startswith(("python", "node", "ruby", "perl", "php", "bun", "deno"))):
+        return program
+    words = command.split()
+    for i, word in enumerate(words[1:], 1):
+        if word == "-m" and i + 1 < len(words):
+            return words[i + 1]                  # python -m a.module
+        if word == "-c":
+            return program
+        if _SCRIPT.search(word):
+            return os.path.basename(word)
+    return program
+
+
+def short_command(command, limit=240):
+    """A command line to show: the home folder as ~, and cut to a readable length."""
+    text = " ".join(str(command or "").split())
+    home = str(HOME)
+    if home and len(home) > 1:
+        text = text.replace(home + "/", "~/")
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _alive(pid, since):
+    """True while that very program (the number and start time) still runs, not as a leftover entry."""
+    got = describe([pid]).get(pid)
+    if not got or got[1] != since:
+        return False
+    try:
+        stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return bool(stat) and not stat.startswith("Z")
+
+
+def stop_program(pid, since, force=False, asked_by="this computer's page"):
+    """Stops one of the programs the page shows as a session's work, and what it started.
+    Returns (result, words): result is 'stopped', 'running' (asked to stop, still running), 'gone'
+    (it had ended) or 'refused'. Anything else on the computer is never touched."""
+    if WINDOWS:
+        return "refused", "TeamCamel cannot stop programs on Windows"
+    info = _stoppable.get((pid, since))
+    if not info:
+        return "refused", "not one of the programs TeamCamel shows as a session's work"
+    if not _alive(pid, since):
+        _stoppable.pop((pid, since), None)
+        return "gone", "%s had already ended" % info["name"]
+    rows = command_lines()
+    children, command = {}, {}
+    for p, pp, cmd in rows:
+        children.setdefault(pp, []).append(p)
+        command[p] = cmd
+    targets, todo = [pid], [pid]
+    while todo:
+        for c in children.get(todo.pop(), ()):
+            if c not in targets:
+                targets.append(c)
+                todo.append(c)
+    keep = {os.getpid()} | {e["pid"] for e in _last_registry if e.get("pid")}
+    targets = [t for t in targets if t == pid or (t not in keep and not _CLAUDE_APP.match(command.get(t, "")))]
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    for t in reversed(targets):                  # what it started first, the program last
+        try:
+            os.kill(t, sig)
+        except OSError:
+            pass
+    print("%s stopped%s %s (process %d, %d with what it started) of session %s, asked by %s"
+          % (stamp(), " by force" if force else "", info["name"], pid, len(targets), info["session"], asked_by),
+          flush=True)
+    deadline = time.time() + STOP_WAIT
+    while time.time() < deadline:
+        if not _alive(pid, since):
+            _stoppable.pop((pid, since), None)
+            return "stopped", "%s stopped" % info["name"]
+        time.sleep(0.25)
+    return "running", "%s is still running" % info["name"]
 
 
 def open_tasks(cli_id, since_ms):
@@ -1259,23 +1488,43 @@ def background_work(registry, desktop=None):
         except Exception as err:   # a guess at most: never lose the rest over it
             print("teamcamel: programs named by sessions not read: %r" % err, file=sys.stderr)
     by_pid = {e["pid"]: e for e in registry}
-    labels, first = {}, {}
+    labels, first, stuck, programs = {}, {}, {}, {}
 
     def add(sid, label, since):
         labels.setdefault(sid, []).append(label)
         if since and (sid not in first or since < first[sid]):
             first[sid] = since
 
-    global _programs_seen
+    global _programs_seen, _stoppable
     busy = busy_processes(procs or [])
+    commands = {pid: cmd for pid, _, cmd in command_lines()} if procs else {}
+    global _names
+    names = {}
+    for p in procs or []:
+        key = (p["pid"], p["since"])
+        if p.get("via") != "named":              # a named program already carries its script's name
+            # A program ending as it is looked at may have no command line left: keep its name.
+            p["program"] = (program_name(p["program"], commands[p["pid"]]) if p["pid"] in commands
+                            else _names.get(key, p["program"]))
+        names[key] = p["program"]
+    _names = names
+    stoppable = {}
     for p in busy:
         sid = (by_pid.get(p["claude"]) or {}).get("sessionId") or p["session"]
         if sid:
             add(sid, p["program"], p["since"])
+            quiet = quiet_seconds(p)
+            if quiet >= STUCK_AFTER:
+                stuck.setdefault(sid, []).append(p["program"])
+            programs.setdefault(sid, []).append({
+                "pid": p["pid"], "since": p["since"], "name": p["program"], "cpu": round(p["cpu"]),
+                "cmd": short_command(commands.get(p["pid"], "")), "stuck": quiet >= STUCK_AFTER, "quietSec": quiet})
+            stoppable[(p["pid"], p["since"])] = {"name": p["program"], "session": sid}
+    _stoppable = stoppable
     # What each program a session started is doing: in the report, to see why one counts or not.
     _programs_seen = [{"session": (by_pid.get(p["claude"]) or {}).get("sessionId") or p["session"],
                        "program": p["program"], "cpu": round(p["cpu"], 1), "busy": p in busy,
-                       "via": p.get("via", "mark"),
+                       "via": p.get("via", "mark"), "quietMin": quiet_seconds(p) // 60,
                        "kbPerMin": round(_activity.get((p["pid"], p["since"]), {}).get("rate", 0) / 1024)
                        if "rate" in _activity.get((p["pid"], p["since"]), {}) else None}
                       for p in procs or []]
@@ -1288,7 +1537,8 @@ def background_work(registry, desktop=None):
             if kind == "command" and table is not None and e["pid"] not in shells:
                 continue    # no shell of this session is left: the command is over, notice or not
             add(e["sessionId"], kind, start)
-    return {sid: (work_detail(found), first.get(sid)) for sid, found in labels.items()}
+    return {sid: {"detail": work_detail(found), "since": first.get(sid), "stuck": sorted(set(stuck.get(sid, []))),
+                  "programs": programs.get(sid, [])} for sid, found in labels.items()}
 
 
 def work_detail(labels):
@@ -1421,7 +1671,7 @@ def clean_settings(d):
         v = d.get(key)
         if isinstance(v, dict):
             out[key] = {n: v[n] for n in names if isinstance(v.get(n), bool)}
-    for key in ("versions", "online", "archived", "tips"):
+    for key in ("versions", "online", "archived", "tips", "stopFromOthers"):
         if isinstance(d.get(key), bool):
             out[key] = d[key]
     if type(d.get("refresh")) is int and d["refresh"] in REFRESH_CHOICES:
@@ -1601,6 +1851,7 @@ def with_folder(entry, path, seen):
     """A renamed or moved folder: the session carries on there, under the new name. A deleted
     one: no longer needing you. One that cannot be told: noted."""
     fate, where = follow_folder(path, seen)
+    entry["_dir"] = where or path            # for telling apart folders of the same name
     if where and where != path:
         entry["ws"] = ws_name(where)
     if fate:
@@ -1699,13 +1950,38 @@ def classify(live, cli_id, last_activity, background=None):
         state, detail, since = verdict
         since = since or last_activity
     if state == "completed" and background and cli_id in background:
-        detail, since_work = background[cli_id]
-        return "working", detail, since_work or since, False
+        work = background[cli_id]
+        if work.get("stuck"):
+            # Nonstop on the processor, and nothing read, written or sent for an hour: it needs you.
+            return "stuck", ", ".join(work["stuck"]), work.get("since") or since, True
+        return "working", work["detail"], work.get("since") or since, False
     attention = False
     if state == "interrupted":
         recent = since and now_ms() - since < INTERRUPTED_ATTENTION_DAYS * 86400 * 1000
         attention = bool(live) or bool(recent)
     return state, detail, since, attention
+
+
+def with_programs(entry, work):
+    """The programs that keep a session working, for the page to name them and offer to stop them."""
+    if work and entry["state"] in ("working", "stuck") and work.get("programs"):
+        entry["programs"] = work["programs"]
+    return entry
+
+
+def effective_settings(name):
+    """The settings in force on a computer: its own, else the ones for all computers."""
+    own = own_settings(name)
+    return own if own is not None else (shared_settings() or {})
+
+
+def _safe(name):
+    return re.sub(r"[^\w.-]", "_", str(name)).strip(".") or "node"
+
+
+def stop_request_path(src, dst):
+    """Stop requests one computer sends another: written only by the sender, so never two writers."""
+    return STATE / ("teamcamel.stop.%s.to.%s" % (_safe(src), _safe(dst)))
 
 
 def collect():
@@ -1742,6 +2018,7 @@ def collect():
                 "live": bool(live),
                 "link": "claude://claude.ai/epitaxy/%s" % d["sessionId"],
                 "archived": True,
+                "_dir": cwd,
             })
             continue
         # Work started under one of the session's earlier internal ids is the session's work too.
@@ -1755,7 +2032,7 @@ def collect():
             when = _as_int(d.get("lastTurnEdgeAt")) or since
             if live or (when and now_ms() - when < INTERRUPTED_ATTENTION_DAYS * 86400 * 1000):
                 state, detail, since, attention = "input", short(need), when, True
-        sessions.append(with_folder({
+        sessions.append(with_folder(with_programs({
             "id": d["sessionId"],
             "title": d.get("title") or (live or {}).get("name") or "(untitled)",
             "ws": ws_name(cwd),
@@ -1765,14 +2042,14 @@ def collect():
             "attention": attention,
             "live": bool(live),
             "link": "claude://claude.ai/epitaxy/%s" % d["sessionId"],
-        }, cwd, seen))
+        }, background.get(d.get("cliSessionId"))), cwd, seen))
 
     # Sessions started outside the desktop app (a terminal `claude`).
     for e in registry:
         if e["pid"] in matched:
             continue
         state, detail, since, attention = classify(e, e.get("sessionId"), e.get("updatedAt"), background)
-        sessions.append(with_folder({
+        sessions.append(with_folder(with_programs({
             "id": e.get("sessionId") or "pid-%d" % e["pid"],
             "title": e.get("name") or "(terminal session)",
             "ws": ws_name(e.get("cwd")),
@@ -1782,7 +2059,7 @@ def collect():
             "attention": attention,
             "live": True,
             "link": None,
-        }, e.get("cwd"), seen))
+        }, background.get(e.get("sessionId"))), e.get("cwd"), seen))
 
     try:
         sessions += [with_folder(x, x.pop("cwd", None), seen) for x in codex_sessions()]
@@ -1790,6 +2067,7 @@ def collect():
         print("teamcamel: Codex sessions skipped: %r" % err, file=sys.stderr)
 
     save_folder_ids()
+    tell_workspaces_apart(sessions)
     sessions.sort(key=lambda s: s["id"])
     return sessions
 
@@ -1802,12 +2080,30 @@ def code_stamp():
         return None
 
 
-def page_stamp():
-    """Changes whenever web/index.html does; an open page reloads itself on a new value."""
+_page = {"web": None, "mtime": None, "body": None}
+
+
+def page_body():
+    """web/index.html as last seen whole. A copy caught while the shared folder is still writing it
+    (it does not end in </html> yet) is never served: the last whole copy is, until it is done."""
+    path = WEB / "index.html"
+    if _page["web"] != WEB:
+        _page.update(web=WEB, mtime=None, body=None)
     try:
-        return str((WEB / "index.html").stat().st_mtime_ns)
+        mtime = path.stat().st_mtime_ns
+        if mtime != _page["mtime"]:
+            body = path.read_bytes()
+            if body.rstrip().endswith(b"</html>"):
+                _page.update(mtime=mtime, body=body)
     except OSError:
-        return ""
+        pass
+    return _page["body"]
+
+
+def page_stamp():
+    """Changes whenever a new whole web/index.html is there; an open page reloads itself on a new value."""
+    page_body()
+    return str(_page["mtime"] or "")
 
 
 class Node:
@@ -1816,6 +2112,8 @@ class Node:
         self.host = host_name()
         self.os = os_label()
         self.lock = threading.Lock()
+        self.tick_lock = threading.Lock()   # one look at a time: the regular one, or one right after a stop
+        self.request_stamps = {}            # stop request files for this computer, as last seen
         self.snapshot = self.build()
         self.written_hash = None
         self.written_at = 0.0
@@ -1823,6 +2121,7 @@ class Node:
         self.code_pending = None
         self.others = {}
         self.fallback = COLLECT_EVERY
+        self.stops = {}         # stop requests from other computers carried out here: {id: {"result", "words", "at"}}
 
     def refresh_every(self):
         """Seconds between reads: this computer's own settings, else those for all computers,
@@ -1860,16 +2159,28 @@ class Node:
             apps = {}
         return {"schema": 1, "node": self.name, "host": self.host, "os": self.os,
                 "version": __version__, "generatedAt": now_ms(), "sessions": sessions, "apps": apps,
-                "programs": _programs_seen}
+                "programs": _programs_seen,
+                "stopFromOthers": bool(effective_settings(self.name).get("stopFromOthers")) and not WINDOWS,
+                "stops": dict(getattr(self, "stops", {}))}
 
-    def tick(self):
+    def tick(self, write_now=False):
+        with self.tick_lock:
+            self._tick(write_now)
+
+    def _tick(self, write_now):
         snap = self.build()
+        if self.carry_out_stops():
+            snap = self.build()          # a program stopped: report it gone, and the outcome, at once
+            write_now = True
         with self.lock:
             self.snapshot = snap
-        digest = hashlib.sha1(json.dumps([snap["sessions"], snap.get("apps")], sort_keys=True).encode()).hexdigest()
+        digest = hashlib.sha1(json.dumps([snap["sessions"], snap.get("apps"), snap.get("stops"),
+                                          snap.get("stopFromOthers")], sort_keys=True).encode()).hexdigest()
         age = time.time() - self.written_at
-        # Written to the shared folder no oftener than every 30 seconds, nor than the reads.
-        if (digest != self.written_hash and age >= max(WRITE_MIN_GAP, self.refresh_every())) or age >= HEARTBEAT:
+        # Written to the shared folder no oftener than every 30 seconds, nor than the reads; right
+        # away after a program was stopped, so the other computers see it as soon as Dropbox brings it.
+        if ((digest != self.written_hash and (write_now or age >= max(WRITE_MIN_GAP, self.refresh_every())))
+                or age >= HEARTBEAT):
             try:
                 STATE.mkdir(exist_ok=True)
                 state_file(self.name).write_text(json.dumps(snap, indent=1), encoding="utf-8")
@@ -1893,6 +2204,95 @@ class Node:
                 waited += 1
                 if waited % COLLECT_EVERY == 0:
                     self.reload_if_updated()
+                if self.stop_requests_changed():
+                    # Another computer asks to stop a program here: within a second, not at the next look.
+                    try:
+                        self.tick()
+                    except Exception as err:
+                        print("teamcamel: stop request not carried out: %r" % err, file=sys.stderr)
+
+    def goodbye(self, why):
+        """The last report before stopping: the sessions as last seen, and that it stopped."""
+        with self.lock:
+            snap = dict(self.snapshot)
+        snap["generatedAt"] = now_ms()
+        snap["stopped"] = {"at": now_ms(), "why": why}
+        try:
+            STATE.mkdir(exist_ok=True)
+            state_file(self.name).write_text(json.dumps(snap, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+        print("%s TeamCamel stopped: %s" % (stamp(), why), flush=True)
+
+    def send_stop(self, target, pid, since, force):
+        """Asks another computer, through the shared folder, to stop one of its sessions' programs.
+        Returns the request's id; that computer reports the outcome in its own report."""
+        other = None
+        for path in STATE.glob("*.json"):
+            d = self.other_node(path)
+            if d and d.get("node") == target:
+                other = d
+        if not other:
+            raise ValueError("%s is not reporting" % target)
+        if not other.get("stopFromOthers"):
+            raise ValueError("%s does not take stop requests from other computers (see its settings)" % target)
+        path = stop_request_path(self.name, target)
+        try:
+            old = read_json(path).get("requests") or []
+        except (OSError, ValueError, AttributeError):
+            old = []
+        fresh = now_ms() - STOP_REQUEST_MINUTES * 60000
+        keep = [r for r in old if isinstance(r, dict) and (r.get("at") or 0) >= fresh][-20:]
+        rid = os.urandom(6).hex()
+        keep.append({"id": rid, "pid": pid, "since": since, "force": bool(force), "at": now_ms()})
+        STATE.mkdir(exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"from": self.name, "to": target, "requests": keep}, indent=1), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+        return rid
+
+    def stop_requests_changed(self):
+        """True when a stop request file for this computer appeared or changed since the last look."""
+        seen = {}
+        for path in STATE.glob("teamcamel.stop.*.to.%s" % _safe(self.name)):
+            try:
+                seen[path.name] = path.stat().st_mtime_ns
+            except OSError:
+                pass
+        changed = seen != self.request_stamps
+        self.request_stamps = seen
+        return changed and bool(seen)
+
+    def carry_out_stops(self):
+        """Carries out the stop requests other computers left for this one, if its settings allow.
+        True when there was something to report."""
+        now = now_ms()
+        for rid in [k for k, v in self.stops.items() if now - v["at"] > 3 * STOP_REQUEST_MINUTES * 60000]:
+            del self.stops[rid]
+        files = list(STATE.glob("teamcamel.stop.*.to.%s" % _safe(self.name)))
+        if not files:
+            return False
+        allowed = bool(effective_settings(self.name).get("stopFromOthers"))
+        done = False
+        for path in files:
+            try:
+                d = read_json(path)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(d, dict) or d.get("to") != self.name or d.get("from") in (None, self.name):
+                continue
+            for r in d.get("requests") or []:
+                if (not isinstance(r, dict) or not isinstance(r.get("id"), str) or r["id"] in self.stops
+                        or type(r.get("pid")) is not int or type(r.get("since")) is not int
+                        or now - (r.get("at") or 0) > STOP_REQUEST_MINUTES * 60000):
+                    continue
+                if allowed:
+                    result, words = stop_program(r["pid"], r["since"], bool(r.get("force")), str(d["from"]))
+                else:
+                    result, words = "refused", "%s does not take stop requests from other computers" % self.name
+                self.stops[r["id"][:40]] = {"result": result, "words": words, "at": now_ms()}
+                done = True
+        return done
 
     def other_node(self, path):
         """Another node's snapshot; a file caught mid-sync keeps its last good copy."""
@@ -1922,10 +2322,63 @@ class Node:
                 # newer than a TeamCamel that has not restarted yet must not save to an older one
                 "settingsScopes": True, "settings": shared_settings(), "mySettings": own_settings(self.name),
                 "handled": handled_marks(),
+                "canStop": not WINDOWS,       # this TeamCamel can stop programs (2.9.4)
                 "nodes": [mine] + others}
 
 
 # --- page server -------------------------------------------------------------
+
+def start_command():
+    """The command that starts TeamCamel on this computer, for the "not running" page."""
+    if WINDOWS:
+        return 'py "%s" --ensure' % SELF
+    return 'python3 "%s" --ensure' % SELF
+
+
+def service_worker():
+    """A helper the browser keeps for this page: when TeamCamel does not answer, it shows a page
+    saying so, with how to start it, instead of the browser's own "cannot connect"."""
+    page = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>TeamCamel is not running</title>
+<style>body{margin:0;background:#E6EECF;color:#15180E;font:17px/1.45 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;padding:48px 32px}
+main{max-width:640px}h1{font-size:22px;margin:0 0 12px}p{margin:8px 0}.muted{color:#586050;font-size:15px}
+code{display:block;background:#fff;border:1px solid #C7D1AA;border-radius:6px;padding:8px 10px;margin:8px 0;
+font:13px ui-monospace,Menlo,Consolas,monospace;overflow-wrap:anywhere}button{font:inherit;font-size:14px;
+background:#fff;border:1px solid #586050;border-radius:4px;padding:2px 10px;cursor:pointer}</style></head>
+<body><main><h1>TeamCamel is not running on this computer</h1>
+<p id="seen" class="muted"></p>
+<p>STARTS To start it now, run this in Terminal:</p>
+<code id="cmd"></code><button id="copy" type="button">Copy</button>
+<p class="muted">This page looks every 5 seconds and opens TeamCamel as soon as it answers.</p></main>
+<script>
+document.getElementById('cmd').textContent = CMD;
+document.getElementById('copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(CMD);
+try {
+  const seen = Number(localStorage.getItem('teamcamel.lastSeen'));
+  if (seen) document.getElementById('seen').textContent = 'Last seen running: ' + new Date(seen).toLocaleString();
+} catch (e) {}
+setInterval(async () => {
+  try { const r = await fetch('/api/state', { cache: 'no-store' }); if (r.ok) location.reload(); } catch (e) {}
+}, 5000);
+</script></body></html>"""
+    page = page.replace("CMD", json.dumps(start_command()), 2).replace("STARTS ", (
+        "It starts by itself when you log in, and with every Claude session." if login_item_installed()
+        else "It starts by itself with every Claude session.") + " ", 1)
+    return """// TeamCamel %s: shows a "not running" page when TeamCamel does not answer.
+const PAGE = %s;
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', e => {
+  if (e.request.mode !== 'navigate') return;
+  e.respondWith((async () => {
+    const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 8000);
+    try { return await fetch(e.request, { signal: stop.signal }); }
+    catch (err) { return new Response(PAGE, { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }); }
+    finally { clearTimeout(timer); }
+  })());
+});
+""" % (__version__, json.dumps(page))
+
 
 def make_handler(node):
     class Handler(BaseHTTPRequestHandler):
@@ -1935,12 +2388,14 @@ def make_handler(node):
                 return self.reply(403, "text/plain", b"local only")
             path = self.path.split("?")[0]
             if path in ("/", "/index.html"):
-                try:
-                    return self.reply(200, "text/html; charset=utf-8", (WEB / "index.html").read_bytes())
-                except OSError:
+                body = page_body()
+                if body is None:
                     return self.reply(500, "text/plain", b"web/index.html missing")
+                return self.reply(200, "text/html; charset=utf-8", body)
             if path == "/api/state":
                 return self.reply(200, "application/json", json.dumps(node.merged()).encode())
+            if path == "/teamcamel-sw.js":
+                return self.reply(200, "text/javascript; charset=utf-8", service_worker().encode("utf-8"))
             self.reply(404, "text/plain", b"not found")
 
         def do_POST(self):
@@ -1953,7 +2408,7 @@ def make_handler(node):
             if (host not in ("127.0.0.1", "localhost") or (origin is not None and origin not in local)
                     or self.headers.get("X-TeamCamel") != "1"):
                 return self.reply(403, "text/plain", b"local page only")
-            if self.path.split("?")[0] not in ("/api/settings", "/api/handled"):
+            if self.path.split("?")[0] not in ("/api/settings", "/api/handled", "/api/stop"):
                 return self.reply(404, "text/plain", b"not found")
             try:
                 size = int(self.headers.get("Content-Length") or 0)
@@ -1961,6 +2416,27 @@ def make_handler(node):
                 size = -1
             if not 0 < size <= SETTINGS_MAX:
                 return self.reply(413, "text/plain", b"too large")
+            if self.path.split("?")[0] == "/api/stop":
+                # {"node", "pid", "since", "force"}: one of the programs the page shows as a session's work
+                try:
+                    body = json.loads(self.rfile.read(size))
+                    target, pid, since = body.get("node"), body.get("pid"), body.get("since")
+                    if not isinstance(target, str) or type(pid) is not int or type(since) is not int:
+                        raise ValueError("not a stop")
+                except (ValueError, AttributeError):
+                    return self.reply(400, "text/plain", b"not a stop")
+                if target == node.name:
+                    result, words = stop_program(pid, since, bool(body.get("force")))
+                    if result in ("stopped", "gone"):
+                        node.tick(write_now=True)    # the page shows the program gone at once, not at the next look
+                    return self.reply(200, "application/json", json.dumps({"result": result, "words": words}).encode())
+                try:
+                    rid = node.send_stop(target, pid, since, bool(body.get("force")))
+                except ValueError as err:
+                    return self.reply(200, "application/json", json.dumps({"result": "refused", "words": str(err)}).encode())
+                except OSError as err:
+                    return self.reply(500, "text/plain", str(err).encode())
+                return self.reply(200, "application/json", json.dumps({"result": "sent", "id": rid}).encode())
             if self.path.split("?")[0] == "/api/handled":
                 try:
                     body = json.loads(self.rfile.read(size))
@@ -2049,11 +2525,44 @@ def is_running(port):
     return monitor_info(port) is not None
 
 
-def stop(port):
-    """Stop the monitor running on this computer. True when none is left running."""
+def _stop_note_path():
+    return log_path().with_name("teamcamel.stopping")       # local: why the next stop happens
+
+
+def _note_stop(why):
+    """Tells the copy about to be stopped why, for its last word to the other computers."""
+    try:
+        path = _stop_note_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"why": why, "at": now_ms()}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _stop_reason():
+    """Why this copy is being stopped: a fresh note left by --stop or --uninstall, else None."""
+    try:
+        d = read_json(_stop_note_path())
+        _stop_note_path().unlink()
+    except (OSError, ValueError):
+        return None
+    if isinstance(d, dict) and isinstance(d.get("why"), str) and now_ms() - (d.get("at") or 0) < 120000:
+        return d["why"]
+    return None
+
+
+def stop(port, why="stopped with --stop"):
+    """Stop the monitor running on this computer, the login item's copy too, until the next login
+    or Claude session. True when none is left running."""
+    _note_stop(why)
+    if stop_login_item():
+        for _ in range(25):
+            if not is_running(port):
+                break
+            time.sleep(0.2)
     info = monitor_info(port)
     if info is None:
-        print("TeamCamel is not running.")
+        print("TeamCamel is not running." if not login_item_installed() else "TeamCamel stopped.")
         return True
     pid = info.get("pid")
     if not isinstance(pid, int):
@@ -2103,10 +2612,436 @@ def ensure_running(port):
     """Start the collector and page in the background unless they already run.
 
     Called by the Claude SessionStart hook, so it prints nothing (a hook's stdout
-    is fed to the model) and returns at once.
+    is fed to the model) and returns at once. Where the login item is installed, it is
+    the one woken, so that no second copy runs beside it.
     """
-    if not is_running(port):
+    if not is_running(port) and not start_login_item():
         spawn_background(["--port", str(port)])
+
+
+# --- starting at login -----------------------------------------------------------
+#
+# A login item starts TeamCamel as soon as you log in (on a Mac with FileVault, that is the
+# moment you unlock it after a restart: nothing of yours runs before), and starts it again if it
+# ever stops. macOS: a LaunchAgent; Linux: a systemd user service; Windows: the Startup folder.
+#
+# On a Mac, a job started at login may open files in a cloud-storage folder (Dropbox, OneDrive,
+# iCloud Drive...) only if it is an app you have allowed: macOS turns a bare script away without
+# asking. So there the LaunchAgent starts a small helper app, built on that Mac from HELPER_SOURCE
+# below, which starts teamcamel.py and waits for it; macOS asks once whether "TeamCamel" may use
+# the folder. The app's Info.plist names the Python and the teamcamel.py it starts, nothing else.
+
+LOGIN_LABEL = "io.github.volkovcl.teamcamel"
+LOGIN_WAIT = 5                 # seconds between looks while another copy holds the page
+LOGIN_READY_WAIT = 15          # seconds the login item's copy gets to start
+LOGIN_ALLOW_WAIT = 600         # ... or, on a Mac, for you to answer macOS's question about the folder
+
+HELPER_SOURCE = r"""/* TeamCamel helper: teamcamel.py --start-at-login builds this small app on your Mac.
+ *
+ * macOS lets a program started at login open files in a cloud-storage folder (Dropbox,
+ * OneDrive, iCloud Drive...) only if it is an app you have allowed. So the login item starts
+ * this app, and the app starts teamcamel.py (the two paths in its Info.plist), waits for it,
+ * and passes on a request to stop. It does nothing else. */
+#include <CoreFoundation/CoreFoundation.h>
+#include <errno.h>
+#include <signal.h>
+#include <spawn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+
+extern char **environ;
+static pid_t child = 0;
+
+static void pass_on(int sig) {
+    if (child > 0)
+        kill(child, sig);
+}
+
+/* A path from this app's own Info.plist. */
+static char *setting(const char *key) {
+    CFBundleRef app = CFBundleGetMainBundle();
+    CFStringRef name = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+    CFTypeRef value = app && name ? CFBundleGetValueForInfoDictionaryKey(app, name) : NULL;
+    if (name)
+        CFRelease(name);
+    if (!value || CFGetTypeID(value) != CFStringGetTypeID())
+        return NULL;
+    CFIndex size = CFStringGetMaximumSizeOfFileSystemRepresentation((CFStringRef)value);
+    char *path = malloc(size);
+    if (path && CFStringGetFileSystemRepresentation((CFStringRef)value, path, size))
+        return path;
+    free(path);
+    return NULL;
+}
+
+int main(int argc, char *argv[]) {
+    char *python = setting("TeamCamelPython"), *script = setting("TeamCamelScript");
+    char **args = calloc(argc + 3, sizeof *args);
+    if (!python || !script || !args) {
+        fputs("TeamCamel helper: its Info.plist does not say what to start\n", stderr);
+        return 1;
+    }
+    args[0] = python;
+    args[1] = script;
+    args[2] = "--login-item";
+    for (int i = 1; i < argc; i++)          /* such as --port 2264 */
+        args[i + 2] = argv[i];
+
+    struct sigaction pass;
+    memset(&pass, 0, sizeof pass);
+    pass.sa_handler = pass_on;
+    sigset_t stops, before;
+    sigemptyset(&stops);
+    sigaddset(&stops, SIGTERM);
+    sigaddset(&stops, SIGINT);
+    sigaddset(&stops, SIGHUP);
+    sigprocmask(SIG_BLOCK, &stops, &before);  /* a stop that comes while starting waits for the child */
+    sigaction(SIGTERM, &pass, NULL);
+    sigaction(SIGINT, &pass, NULL);
+    sigaction(SIGHUP, &pass, NULL);
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setsigmask(&attr, &before);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGMASK);
+    int err = posix_spawn(&child, python, NULL, &attr, args, environ);
+    sigprocmask(SIG_SETMASK, &before, NULL);
+    if (err) {
+        fprintf(stderr, "TeamCamel helper: cannot start %s: %s\n", python, strerror(err));
+        return 1;
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0)
+        if (errno != EINTR)
+            return 1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+"""
+
+
+def login_item_path():
+    if MACOS:
+        return HOME / "Library" / "LaunchAgents" / (LOGIN_LABEL + ".plist")
+    if WINDOWS:
+        base = Path(os.environ.get("APPDATA") or HOME / "AppData" / "Roaming")
+        return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "TeamCamel.cmd"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "systemd" / "user" / "teamcamel.service"
+
+
+def helper_app():
+    """Where the Mac helper app goes."""
+    return HOME / "Library" / "Application Support" / "TeamCamel" / "TeamCamel.app"
+
+
+def helper_program():
+    return helper_app() / "Contents" / "MacOS" / "TeamCamel"
+
+
+def _login_python():
+    return "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else sys.executable
+
+
+def helper_info():
+    """The helper app's Info.plist for this copy of TeamCamel."""
+    info = {
+        "CFBundleIdentifier": LOGIN_LABEL, "CFBundleName": "TeamCamel", "CFBundleDisplayName": "TeamCamel",
+        "CFBundleExecutable": "TeamCamel", "CFBundlePackageType": "APPL", "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleShortVersionString": "1.0", "CFBundleVersion": "1", "LSUIElement": True,
+        "TeamCamelPython": _login_python(), "TeamCamelScript": str(SELF),
+        "TeamCamelNote": "Built on this Mac by teamcamel.py --start-at-login. It starts TeamCamelScript with "
+                         "TeamCamelPython, and nothing else. Its source: Contents/Resources/helper.c.",
+    }
+    place = protected_place()
+    if place:   # the reason macOS shows when it asks
+        info[place[2]] = ("TeamCamel runs from this folder and keeps its shared files in it, so that your "
+                          "computers can see each other's sessions.")
+    return info
+
+
+def helper_script():
+    """The teamcamel.py that the helper app on this computer starts, or None."""
+    import plistlib
+    try:
+        with open(str(helper_app() / "Contents" / "Info.plist"), "rb") as f:
+            script = plistlib.load(f).get("TeamCamelScript")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return script if isinstance(script, str) else None
+
+
+def build_helper_app():
+    """Builds the Mac helper app for this copy of TeamCamel, unless it is already there just as it
+    would be built (so that macOS's permission for it stays). None when done, else why not."""
+    import plistlib
+    import tempfile
+    app = helper_app()
+    info, source = plistlib.dumps(helper_info()), HELPER_SOURCE.encode("utf-8")
+    try:
+        if ((app / "Contents" / "Info.plist").read_bytes() == info
+                and (app / "Contents" / "Resources" / "helper.c").read_bytes() == source
+                and helper_program().is_file() and _run_quiet(["codesign", "--verify", str(app)]) == 0):
+            return None
+    except OSError:
+        pass
+    if _run_quiet(["xcode-select", "-p"]) != 0:
+        # Without them, calling the compiler would only open an offer to install them.
+        return "this Mac lacks Apple's command line tools; to add them: xcode-select --install"
+    work = None
+    try:
+        work = Path(tempfile.mkdtemp(prefix="teamcamel-app-"))
+        new = work / "TeamCamel.app"
+        (new / "Contents" / "MacOS").mkdir(parents=True)
+        (new / "Contents" / "Resources").mkdir()
+        (new / "Contents" / "Info.plist").write_bytes(info)
+        (new / "Contents" / "Resources" / "helper.c").write_bytes(source)
+        for step, cmd in (("compiling", ["xcrun", "clang", "-Os", "-Wall", "-framework", "CoreFoundation", "-o",
+                                         str(new / "Contents" / "MacOS" / "TeamCamel"),
+                                         str(new / "Contents" / "Resources" / "helper.c")]),
+                          ("signing", ["codesign", "--force", "--sign", "-", "--identifier", LOGIN_LABEL, str(new)])):
+            done = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            if done.returncode != 0:
+                return "%s failed: %s" % (step, (done.stderr or done.stdout).strip()[:400])
+        if app.exists():
+            shutil.rmtree(str(app))
+        app.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(new), str(app))
+        return None
+    except (OSError, subprocess.SubprocessError) as err:
+        return str(err)
+    finally:
+        if work:
+            shutil.rmtree(str(work), ignore_errors=True)
+
+
+def remove_helper_app():
+    """Takes this copy's helper app away. True when there was one."""
+    if not MACOS or helper_script() != str(SELF):
+        return False
+    shutil.rmtree(str(helper_app()), ignore_errors=True)
+    try:
+        helper_app().parent.rmdir()          # the TeamCamel folder, when nothing else is in it
+    except OSError:
+        pass
+    return not helper_app().exists()
+
+
+def protected_place():
+    """When this copy sits in a folder that macOS keeps from a program started at login until you
+    allow it: (what macOS asks about, its privacy service, the Info.plist key for the reason). Else None."""
+    lib = HOME / "Library"
+    for base, name in ((lib / "CloudStorage", None), (lib / "Mobile Documents", "iCloud Drive"),
+                       (HOME / "Desktop", "Desktop"), (HOME / "Documents", "Documents"),
+                       (HOME / "Downloads", "Downloads")):
+        try:
+            part = SELF.relative_to(base).parts[0]
+        except (ValueError, IndexError):
+            continue
+        if name in ("Desktop", "Documents", "Downloads"):
+            return ("files in your %s folder" % name, "SystemPolicy%sFolder" % name, "NS%sFolderUsageDescription" % name)
+        if name is None:
+            service = part.split("-", 1)[0]       # Dropbox-Personal, OneDrive-Contoso, GoogleDrive-me@...
+            name = {"GoogleDrive": "Google Drive"}.get(service, service) or "a cloud-storage service"
+        return ("files managed by %s" % name, "FileProviderDomain", "NSFileProviderDomainUsageDescription")
+    return None
+
+
+def login_item_text(port=PORT, helper=False):
+    extra = [] if port == PORT else ["--port", str(port)]
+    if MACOS:
+        import plistlib
+        job = {"Label": LOGIN_LABEL,
+               "ProgramArguments": ([str(helper_program())] if helper else [_login_python(), str(SELF), "--login-item"]) + extra,
+               "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 15, "ProcessType": "Background",
+               "WorkingDirectory": str(HOME), "StandardOutPath": str(log_path()), "StandardErrorPath": str(log_path())}
+        if helper:
+            job["AssociatedBundleIdentifiers"] = [LOGIN_LABEL]   # shown as "TeamCamel" in Login Items
+        return plistlib.dumps(job).decode("utf-8")
+    if WINDOWS:
+        quiet = Path(sys.executable).with_name("pythonw.exe")
+        py = str(quiet if quiet.exists() else Path(sys.executable))
+        return '@echo off\r\nstart "" "%s" "%s" --ensure%s\r\n' % (py, SELF, "".join(" " + a for a in extra))
+    return ("[Unit]\nDescription=TeamCamel session monitor\n\n[Service]\n"
+            "ExecStart=\"%s\" \"%s\" --login-item%s\nRestart=always\nRestartSec=15\n\n"
+            "[Install]\nWantedBy=default.target\n" % (sys.executable, SELF, "".join(" " + a for a in extra)))
+
+
+def _login_item_file():
+    try:
+        return login_item_path().read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def login_item_uses_helper():
+    """True when this copy's login item starts it through the Mac helper app."""
+    return MACOS and str(helper_program()) in _login_item_file() and helper_script() == str(SELF)
+
+
+def login_item_installed():
+    """True when this copy of TeamCamel has its login item."""
+    return str(SELF) in _login_item_file() or login_item_uses_helper()
+
+
+def _run_quiet(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=15).returncode
+    except (OSError, subprocess.SubprocessError):
+        return -1
+
+
+def _gui():
+    return "gui/%d" % os.getuid()
+
+
+def login_ready_path():
+    return log_path().with_name("teamcamel.login-item.json")
+
+
+def note_login_item_started():
+    """As the login item's copy: says it has started (so it could open its own files)."""
+    try:
+        path = login_ready_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"pid": os.getpid(), "at": now_ms(), "script": str(SELF),
+                                    "version": __version__}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def login_item_ready(since, wait, hint=None, sleep=time.sleep):
+    """True once the login item's copy says it started (after `since`, in ms), looked for once a
+    second for up to `wait` seconds. `hint` is printed if it has not started after a few seconds."""
+    for second in range(int(wait) + 1):
+        try:
+            d = read_json(login_ready_path())
+        except (OSError, ValueError):
+            d = None
+        if isinstance(d, dict) and d.get("script") == str(SELF) and (d.get("at") or 0) >= since:
+            return True
+        if hint and second == 4:
+            print(hint, flush=True)
+        if second < int(wait):
+            sleep(1)
+    return False
+
+
+def install_login_item(port=PORT):
+    """Writes the login item and starts it. True when it is in place and its copy has started."""
+    path, command = login_item_path(), "py teamcamel.py" if WINDOWS else "python3 teamcamel.py"
+    place, helper = protected_place() if MACOS else None, False
+    if MACOS:
+        print("To start TeamCamel when you log in, this adds two things to this Mac:\n"
+              "  - a small helper app, built here from the source inside it:\n      %s\n"
+              "    (macOS lets an app, but not a bare script started at login, into a cloud-storage folder\n"
+              "    such as Dropbox once you allow it; the app starts this teamcamel.py and nothing else)\n"
+              "  - a login item that starts the app:\n      %s" % (helper_app(), path), flush=True)
+        why = build_helper_app()
+        helper = why is None
+        if not helper:
+            print("The helper app could not be built (%s).\nTrying without it." % why, flush=True)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(login_item_text(port, helper), encoding="utf-8")
+    except OSError as err:
+        remove_helper_app()
+        print("Could not add the login item (%s): TeamCamel still starts with every Claude session." % err)
+        return False
+    since = now_ms()
+    if MACOS:
+        _run_quiet(["launchctl", "bootout", "%s/%s" % (_gui(), LOGIN_LABEL)])
+        _run_quiet(["launchctl", "bootstrap", _gui(), str(path)])
+    elif not WINDOWS:
+        _run_quiet(["systemctl", "--user", "daemon-reload"])
+        _run_quiet(["systemctl", "--user", "enable", "--now", "teamcamel.service"])
+    if not WINDOWS:
+        asks = helper and place is not None
+        hint = ('macOS should now ask, on this Mac\'s screen, whether "TeamCamel" may access\n'
+                '%s. Click Allow. Waiting for the answer (up to %d minutes; Ctrl-C gives up)...'
+                % (place[0], LOGIN_ALLOW_WAIT // 60)) if asks else None
+        try:
+            ready = login_item_ready(since, LOGIN_ALLOW_WAIT if asks else LOGIN_READY_WAIT, hint)
+        except KeyboardInterrupt:
+            ready = False
+        if not ready:
+            remove_login_item(quiet=True)
+            print("\nThe login item's copy of TeamCamel did not start, so the login item%s was taken away again.\n"
+                  "Nothing else changed: TeamCamel runs as before, starting with every Claude session." % (
+                      " and the helper app" if helper else ""))
+            if asks:
+                print("If macOS asked and the answer was Don't Allow, macOS remembers it and will not ask again.\n"
+                      "To be asked again, run:  tccutil reset %s %s\n"
+                      "and then this command again. If macOS did not ask at all, the log may say why:\n  %s"
+                      % (place[1], LOGIN_LABEL, log_path()))
+            elif place:
+                print("Without the helper app, macOS lets a bare script started at login open %s\n"
+                      "only with a permission it cannot ask for. The log may say: Operation not permitted.\n  %s"
+                      % (place[0], log_path()))
+            else:
+                print("The log may say why:\n  %s" % log_path())
+            return False
+    if helper:
+        print("Login item added. It starts the TeamCamel helper app, which starts TeamCamel:\n"
+              "TeamCamel now also starts when you log in, and again if it stops.\n"
+              "To take both away:  %s --no-start-at-login" % command)
+    else:
+        print("Login item added: %s\nTeamCamel now also starts when you log in, and again if it stops.\n"
+              "To take it away:  %s --no-start-at-login" % (path, command))
+    return True
+
+
+def start_login_item():
+    """Wakes the login item's copy (loading it again after --stop). True when that was done."""
+    if not login_item_installed():
+        return False
+    if MACOS:
+        if _run_quiet(["launchctl", "kickstart", "%s/%s" % (_gui(), LOGIN_LABEL)]) == 0:
+            return True
+        return _run_quiet(["launchctl", "bootstrap", _gui(), str(login_item_path())]) == 0
+    if WINDOWS:
+        return False
+    return _run_quiet(["systemctl", "--user", "start", "teamcamel.service"]) == 0
+
+
+def stop_login_item():
+    """Stops the login item's copy until the next login (or Claude session). True when done."""
+    if not login_item_installed():
+        return False
+    if MACOS:
+        return _run_quiet(["launchctl", "bootout", "%s/%s" % (_gui(), LOGIN_LABEL)]) == 0
+    if WINDOWS:
+        return False
+    return _run_quiet(["systemctl", "--user", "stop", "teamcamel.service"]) == 0
+
+
+def remove_login_item(quiet=False):
+    """Takes the login item away, and on a Mac its helper app. True when there was one for this copy."""
+    if not login_item_installed():
+        return False
+    stop_login_item()
+    if not MACOS and not WINDOWS:
+        _run_quiet(["systemctl", "--user", "disable", "teamcamel.service"])
+    try:
+        login_item_path().unlink()
+    except OSError:
+        pass
+    app = remove_helper_app()
+    if not quiet:
+        print("Login item removed: %s." % login_item_path())
+        if app:
+            print("Helper app removed: %s." % helper_app())
+    return True
+
+
+def wait_for_port(port, sleep=time.sleep):
+    """As the login item's copy: while another TeamCamel already shows the page, stand by and
+    take over if it stops (so that two never run, and one always does)."""
+    said = False
+    while is_running(port):
+        if not said:
+            print("%s TeamCamel already runs on port %d; standing by" % (stamp(), port), flush=True)
+            said = True
+        sleep(LOGIN_WAIT)
 
 
 # --- one-time setup ----------------------------------------------------------
@@ -2219,7 +3154,9 @@ def uninstall(port, settings=None):
                 print("Start hook removed from %s (backup: %s)." % (settings, backup))
     if not removed:
         print("No start hook for this copy of TeamCamel in %s." % settings)
-    if stop(port):
+    _note_stop("taken out with --uninstall")
+    remove_login_item()
+    if stop(port, "taken out with --uninstall"):
         print("TeamCamel is off this computer's Claude start-up. You can delete the folder %s." % ROOT)
 
 
@@ -2276,6 +3213,10 @@ def check(port):
         procs += named_programs(_last_registry, desktop_sessions(), skip={p["pid"] for p in procs})
     except Exception:
         pass
+    commands = {pid: cmd for pid, _, cmd in command_lines()} if procs else {}
+    for p in procs:
+        if p.get("via") != "named":
+            p["program"] = program_name(p["program"], commands.get(p["pid"], ""))
     busy_processes(procs)
     time.sleep(5)
     busy = busy_processes(procs)
@@ -2284,6 +3225,9 @@ def check(port):
                                               "%.0f KB a minute moved" % (_activity.get((p["pid"], p["since"]), {}).get("rate", 0) / 1024),
                                               ", its file named by a session" if p.get("via") == "named" else "")
         for p in procs) or "none running")
+    line("Stopping", "Windows: not offered" if WINDOWS else
+         "from this computer's page; other computers may ask too" if effective_settings(node_name()).get("stopFromOthers")
+         else "from this computer's page only")
     line("Monitor", "running at http://127.0.0.1:%d/" % port if is_running(port) else "not running")
     try:
         ours = our_hooks(read_json(SETTINGS))[1] if SETTINGS.exists() else []
@@ -2293,6 +3237,9 @@ def check(port):
     line("Start hook", "installed" if any(h.get("command") == want for h in ours)
          else "installed, but for another location: run --install-hook" if ours
          else "not installed: run --install-hook")
+    line("Login item", "installed: starts TeamCamel when you log in, through its helper app (%s)" % helper_app()
+         if login_item_uses_helper() else "installed: starts TeamCamel when you log in (%s)" % login_item_path()
+         if login_item_installed() else "none (optional: --start-at-login starts TeamCamel when you log in)")
     line("Log", str(log_path()))
 
 
@@ -2451,6 +3398,20 @@ def precheck(port):
     return len(problems)
 
 
+def install_goodbye(node):
+    """When this copy is stopped (a shutdown, a restart, a log-out, or --stop), it leaves a last word
+    in its report, so the other computers say "stopped at 9:23 PM" rather than "not reporting"."""
+    def goodbye(signum, frame):
+        why = _stop_reason()
+        if why != "handover":
+            node.goodbye(why or "shutting down, restarting or logging out")
+        os._exit(0)
+    try:
+        signal.signal(signal.SIGTERM, goodbye)
+    except (ValueError, OSError, AttributeError):
+        pass
+
+
 def main():
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -2470,6 +3431,10 @@ def main():
     ap.add_argument("--uninstall", action="store_true",
                     help="take this copy out of Claude's start-up and stop it; the folder stays")
     ap.add_argument("--no-serve", action="store_true", help="collect and report only; no page")
+    ap.add_argument("--start-at-login", action="store_true",
+                    help="optional: also start TeamCamel when you log in, and again if it stops (adds a login item)")
+    ap.add_argument("--no-start-at-login", action="store_true", help="take that login item away again")
+    ap.add_argument("--login-item", action="store_true", help=argparse.SUPPRESS)   # how the login item starts it
     ap.add_argument("--once", action="store_true", help="print this node's snapshot and exit")
     ap.add_argument("--version", action="version", version="TeamCamel " + __version__)
     args = ap.parse_args()
@@ -2486,6 +3451,25 @@ def main():
         install_hook(port=args.port)
         ensure_running(args.port)
         print("TeamCamel page: http://127.0.0.1:%d/" % args.port)
+        if not login_item_installed():
+            print("\nOptional: TeamCamel can also start by itself when you log in, so that its page is up\n"
+                  "after a restart before any Claude session. That adds a login item to this computer:\n"
+                  "  %s\n%s"
+                  "Only if you want it:  %s --start-at-login   (take it away with --no-start-at-login)"
+                  % (login_item_path(), "and, on a Mac, a small helper app built here, which the login item starts:\n"
+                     "  %s\n" % helper_app() if MACOS else "", "py teamcamel.py" if WINDOWS else "python3 teamcamel.py"))
+        return
+    if args.start_at_login:
+        # The copy already running keeps the page; the login item's copy stands by, and takes over
+        # when that one ends (at the latest at the next restart). Nothing is stopped.
+        install_login_item(args.port)
+        if not is_running(args.port):
+            ensure_running(args.port)
+        return
+    if args.no_start_at_login:
+        if not remove_login_item():
+            print("No login item for this copy of TeamCamel. Nothing was changed.")
+        ensure_running(args.port)                # the page stays up, started the usual way
         return
     if args.check:
         check(args.port)
@@ -2496,18 +3480,29 @@ def main():
         uninstall(args.port)
         return
 
+    if args.login_item:
+        note_login_item_started()
+        wait_for_port(args.port)
     node = Node()
     if args.once:
         print(json.dumps(node.snapshot, indent=1))
         return
+    install_goodbye(node)
     if args.no_serve:
         node.run(args.interval)
         return
 
-    try:
-        server = open_server(args.port, make_handler(node))
-    except OSError as err:
-        sys.exit("teamcamel: cannot listen on 127.0.0.1:%d (%s). Is it already running?" % (args.port, err))
+    while True:
+        try:
+            server = open_server(args.port, make_handler(node))
+            break
+        except OSError as err:
+            if not args.login_item:
+                sys.exit("teamcamel: cannot listen on 127.0.0.1:%d (%s). Is it already running?" % (args.port, err))
+            # The login item's copy never gives up (it would only be started again): it waits.
+            print("%s port %d is taken (%s); trying again in a minute" % (stamp(), args.port, err), flush=True)
+            time.sleep(60)
+            wait_for_port(args.port)
     threading.Thread(target=node.run, args=(args.interval,), daemon=True).start()
     print("%s TeamCamel %s on node '%s' (%s): http://127.0.0.1:%d/ (pid %d)"
           % (stamp(), __version__, node.name, node.os, args.port, os.getpid()), flush=True)

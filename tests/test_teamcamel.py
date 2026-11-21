@@ -70,6 +70,7 @@ def transcript(path, last):
 
 
 tmp = Path(tempfile.mkdtemp(prefix="tc-test-"))
+tc._activity_file = lambda: tmp / "activity.json"      # never the real TeamCamel's own file
 sleepers = [subprocess.Popen(["sleep", "120"]) for _ in range(4)]
 gone = subprocess.Popen(["sleep", "0"]); gone.wait()
 now = tc.now_ms()
@@ -542,6 +543,29 @@ try:
         procs = {p["pid"]: p for p in tc.marked_processes(table)}
         ok(set(procs) == {busy.pid, busy2.pid, idle.pid} and procs[busy.pid]["cpu"] >= tc.BUSY_CPU and procs[idle.pid]["cpu"] < tc.BUSY_CPU,
            "processes carrying a session's marks found, busy told from idle; TeamCamel itself left out")
+        # A session's command quit the Claude app and opened it again: the app and all it starts carry
+        # that session's mark. Only a command of a Claude Code session running inside it counts.
+        app, helper, panel, launcher, cli, command = extra = [subprocess.Popen(["sleep", "120"]) for _ in range(6)]
+        try:
+            stale = "CLAUDE_PID=%d CLAUDE_CODE_SESSION_ID=cliK" % gone.pid
+            base = "/Applications/Claude.app/Contents/"
+            reopened = [
+                (app.pid, 1, base + "MacOS/Claude " + stale),
+                (helper.pid, app.pid, base + "Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu " + stale),
+                (panel.pid, helper.pid, "/bin/zsh -l " + stale),                       # its Terminal panel
+                (launcher.pid, app.pid, base + "Helpers/disclaimer --pgroup -- claude " + stale),
+                (cli.pid, launcher.pid, "/Users/u/Library/Application Support/Claude/claude-code/2.1.308/x/claude.app/"
+                                        "Contents/MacOS/claude --output-format stream-json " + stale),
+                (command.pid, cli.pid, "python3 build.py CLAUDE_PID=%d CLAUDE_CODE_SESSION_ID=cliL" % cli.pid),
+                (busy.pid, 1, "python3 render.py CLAUDE_PID=99999 CLAUDE_CODE_SESSION_ID=cliH")]
+            got = {p["pid"]: p for p in tc.marked_processes(reopened)}
+            ok(not {app.pid, helper.pid, panel.pid, launcher.pid, cli.pid} & set(got),
+               "the Claude app reopened by a session's command, its helpers and what they start: not that session's work")
+            ok(command.pid in got and got[command.pid]["session"] == "cliL" and busy.pid in got,
+               "a command of a Claude Code session running in that app, and a detached program: still counted")
+        finally:
+            for x in extra:
+                x.kill()
         got = {s["title"]: s for s in tc.collect()}
         f, g, h, i, j = (got[t] for t in ("Job with a helper agent", "Job with an idle leftover", "Closed job still rendering",
                                           "Waiting job still rendering", "Job whose command ended unnoticed"))
@@ -687,6 +711,498 @@ try:
         subprocess.run(["pkill", "-f", "^sleep 60$"], capture_output=True)
         tc._named_cache.clear()
 
+    print("programs a session left running: names, may be stuck, stopping")
+    restore()
+    home = tmp / "stuck-home"
+    platform("mac" if REAL["MACOS"] else "linux", home)
+    tc.STATE = tmp / "stuck-state"; tc.STATE.mkdir()
+    ok(tc.program_name("Python", "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python "
+                                 "-I tools/qa3_billscan.py tools tools/qa3_billscan_result.txt") == "qa3_billscan.py"
+       and tc.program_name("bash", "/bin/bash /Volumes/T7/_rclone/run_uploads.sh t7") == "run_uploads.sh"
+       and tc.program_name("python3", "python3 -m http.server 8000") == "http.server"
+       and tc.program_name("node", "node /u/app/server.js --port 3") == "server.js"
+       and tc.program_name("blender", "blender -b scene.blend -a") == "blender"
+       and tc.program_name("Python", "python3 -c while True: pass") == "Python",
+       "a program running a script is named by the script; other programs keep their own name")
+    ok(tc.short_command(str(tc.HOME) + "/x/run.py  --all") == "~/x/run.py --all" and len(tc.short_command("a " * 400)) == 240,
+       "a command line shown with the home folder as ~, cut to a readable length")
+    # The judgment, step by step: what each look sees is set here.
+    real_moved, real_after = tc.bytes_moved, tc.STUCK_AFTER
+    tc.STUCK_AFTER = 1
+    seen = {}
+    tc.bytes_moved = lambda pids: {p: seen[p] for p in pids if p in seen}
+    try:
+        spin = {"pid": 900001, "since": now - 7200000, "cpu": 99.0, "program": "spin.py"}
+        work = {"pid": 900002, "since": now - 7200000, "cpu": 99.0, "program": "render.py"}
+        blind = {"pid": 900003, "since": now - 7200000, "cpu": 99.0, "program": "other"}
+        seen.update({900001: 5000, 900002: 5000})
+        tc.busy_processes([spin, work, blind])
+        time.sleep(1.2)
+        seen[900002] = 9000                                  # the render wrote something since
+        tc.busy_processes([spin, work, blind])
+        ok(tc.may_be_stuck(spin) and not tc.may_be_stuck(work),
+           "nonstop on the processor with nothing read, written or sent: may be stuck; one that writes: working")
+        ok(not tc.may_be_stuck(blind), "a program whose data cannot be read is never judged stuck")
+        tc.busy_processes([dict(spin, cpu=3.0)])
+        ok(not tc.may_be_stuck(dict(spin, cpu=3.0)), "one that lets go of the processor is not spinning: not stuck")
+        tc._activity.clear(); tc._activity_seed = None
+        (tmp / "activity.json").write_text(json.dumps({"900001:%d" % spin["since"]: time.time() - 7200}))
+        tc.busy_processes([spin])
+        ok(tc.quiet_seconds(spin) >= 7000, "the quiet time is kept over a restart of TeamCamel, in a local file")
+    finally:
+        tc.bytes_moved, tc.STUCK_AFTER = real_moved, real_after
+        tc._activity.clear(); tc._activity_seed = None
+
+    # The real thing: programs a session started that run on their own (as a resumed command does).
+    marks = dict({k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")},
+                 CLAUDE_PID=str(gone.pid), CLAUDE_CODE_SESSION_ID="cliS")
+
+    def detached(*args, env=marks):
+        out = subprocess.run(["/bin/sh", "-c", 'nohup "$@" >/dev/null 2>&1 & echo $!', "sh"] + [str(a) for a in args],
+                             env=env, capture_output=True, text=True).stdout
+        return int(out.strip())
+
+    def running(pid):
+        stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        return bool(stat) and not stat.startswith("Z")
+
+    (tmp / "spin.py").write_text("while True:\n    pass\n")
+    (tmp / "writer.py").write_text("import os, time\nf = open(%r, 'wb')\nwhile True:\n    t = time.time()\n"
+                                   "    while time.time() - t < 0.2:\n        pass\n    f.write(b'x' * 65536); f.flush(); "
+                                   "os.fsync(f.fileno())\n" % str(tmp / "written.bin"))
+    (tmp / "stubborn.py").write_text("import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(300)\n")
+    (tmp / "parent.py").write_text("import subprocess, time\nsubprocess.Popen(['sleep', '301'])\ntime.sleep(300)\n")
+    started = []
+    real_after, real_wait = tc.STUCK_AFTER, tc.STOP_WAIT
+    tc.STUCK_AFTER, tc.STOP_WAIT = 3, 2
+    try:
+        sp, wr = detached(sys.executable, tmp / "spin.py"), detached(sys.executable, tmp / "writer.py")
+        started += [sp, wr]
+        deadline = time.time() + 20
+        work = {}
+        while time.time() < deadline:
+            work = tc.background_work([], [])
+            if work.get("cliS", {}).get("stuck"):
+                break
+            time.sleep(1)
+        got = work.get("cliS") or {}
+        names = {g["name"]: g for g in got.get("programs", [])}
+        ok(got.get("stuck") == ["spin.py"] and set(names) == {"spin.py", "writer.py"},
+           "a program spinning silently: may be stuck; one spinning and writing: working, both named by their scripts")
+        ok(names.get("spin.py", {}).get("stuck") and names["spin.py"]["pid"] == sp and "spin.py" in names["spin.py"]["cmd"],
+           "each program sent with its number, start time and command line, for the page")
+        state, detail, since, attention = tc.classify(None, "cliS", now, work)
+        ok(state == "stuck" and detail == "spin.py" and attention, "the session: may be stuck, and it needs you")
+        state, detail, since, attention = tc.classify(None, "cliS", now, {"cliS": dict(got, stuck=[])})
+        ok(state == "working" and "writer.py" in detail and not attention, "without a stuck program: working, as before")
+
+        # Stopping: only what the page shows, matched by number and start time.
+        sp_since = names["spin.py"]["since"]
+        ok(tc.stop_program(sp, sp_since + 1000)[0] == "refused" and tc.stop_program(os.getpid(), now)[0] == "refused",
+           "a program the page does not show, or a number now used by another program: refused")
+        result, words = tc.stop_program(sp, sp_since)
+        ok(result == "stopped" and not running(sp) and words == "spin.py stopped", "a program the page shows: stopped")
+        par = detached(sys.executable, tmp / "parent.py")
+        stub = detached(sys.executable, tmp / "stubborn.py")
+        started += [par, stub]
+        time.sleep(1)
+        kid = int(subprocess.run(["pgrep", "-P", str(par)], capture_output=True, text=True).stdout.split()[0])
+        started.append(kid)
+        for pid in (par, stub):
+            tc._stoppable[(pid, tc.describe([pid])[pid][1])] = {"name": "x.py", "session": "cliS"}
+        result, _ = tc.stop_program(par, tc.describe([par])[par][1])
+        time.sleep(0.5)
+        ok(result == "stopped" and not running(kid), "what the stopped program had started is stopped with it")
+        stub_since = tc.describe([stub])[stub][1]
+        result, words = tc.stop_program(stub, stub_since)
+        ok(result == "running" and running(stub) and words == "x.py is still running",
+           "one that ignores being asked: still running, said so")
+        ok(tc.stop_program(stub, stub_since, force=True)[0] == "stopped" and not running(stub), "stopped by force on a second yes")
+        tc._stoppable[(stub, stub_since)] = {"name": "x.py", "session": "cliS"}
+        ok(tc.stop_program(stub, stub_since)[0] == "gone", "one that has already ended: said so")
+
+        # From another computer, through the shared folder.
+        laptop, desk = tc.Node(), tc.Node()
+        laptop.name, desk.name = "laptop", "desk"
+        target = detached(sys.executable, tmp / "spin.py")
+        started.append(target)
+        t_since = tc.describe([target])[target][1]
+        (tc.STATE / "desk.json").write_text(json.dumps({"node": "desk", "sessions": [], "generatedAt": now, "stopFromOthers": False}))
+        try:
+            laptop.send_stop("desk", target, t_since, False)
+            refused = False
+        except ValueError:
+            refused = True
+        ok(refused and not list(tc.STATE.glob("teamcamel.stop.*")),
+           "a computer whose settings do not take stop requests: not even asked")
+        (tc.STATE / "desk.json").write_text(json.dumps({"node": "desk", "sessions": [], "generatedAt": now + 1, "stopFromOthers": True}))
+        laptop.others.clear()
+        rid = laptop.send_stop("desk", target, t_since, False)
+        ok((tc.STATE / "teamcamel.stop.laptop.to.desk").is_file(), "the request goes into the shared folder, written by the asker only")
+        tc._stoppable[(target, t_since)] = {"name": "spin.py", "session": "cliS"}
+        ok(desk.carry_out_stops() and desk.stops[rid]["result"] == "refused" and running(target),
+           "the other computer refuses while its own settings say no")
+        desk.stops.clear()
+        tc.save_settings({"stopFromOthers": True}, "desk")
+        ok(desk.carry_out_stops() and desk.stops[rid]["result"] == "stopped" and not running(target),
+           "and carries it out once they say yes, reporting the outcome in its report")
+        ok(not desk.carry_out_stops() and len(desk.stops) == 1, "a request is carried out once")
+        old = json.loads((tc.STATE / "teamcamel.stop.laptop.to.desk").read_text())
+        old["requests"] = [dict(old["requests"][0], id="stale", at=now - 11 * 60000)]
+        (tc.STATE / "teamcamel.stop.laptop.to.desk").write_text(json.dumps(old))
+        desk.carry_out_stops()
+        ok("stale" not in desk.stops, "a request older than ten minutes is not carried out")
+        snap = desk.build()
+        ok(snap["stopFromOthers"] is True and "stops" in snap, "each report says whether that computer takes stop requests")
+        # A new request is noticed within a second, carried out, and reported right away.
+        desk.stop_requests_changed()
+        again = detached(sys.executable, tmp / "spin.py")
+        started.append(again)
+        time.sleep(1)
+        a_since = tc.describe([again])[again][1]
+        rid2 = laptop.send_stop("desk", again, a_since, False)
+        ok(desk.stop_requests_changed() and not desk.stop_requests_changed(), "a new request for this computer is noticed once")
+        tc._stoppable[(again, a_since)] = {"name": "spin.py", "session": "cliS"}
+        desk.written_at = time.time()                      # it has just written its report: normally it would wait
+        real_collect = tc.collect
+        tc.collect = lambda: []
+        try:
+            desk.tick()
+        finally:
+            tc.collect = real_collect
+        written = json.loads(tc.state_file("desk").read_text())
+        ok(not running(again) and written["stops"].get(rid2, {}).get("result") == "stopped",
+           "carried out and written to the shared folder at once, not after the usual wait")
+
+        # The page's way in.
+        import http.client
+        server = tc.PageServer(("127.0.0.1", 0), tc.make_handler(desk))
+        tc.threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+
+        def stop_request(body, header=True):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            headers = {"Host": "127.0.0.1:%d" % port, "Content-Type": "application/json",
+                       "Origin": "http://127.0.0.1:%d" % port}
+            if header:
+                headers["X-TeamCamel"] = "1"
+            conn.request("POST", "/api/stop", body=json.dumps(body), headers=headers)
+            r = conn.getresponse()
+            out = (r.status, r.read())
+            conn.close()
+            return out
+        try:
+            ok(stop_request({"node": "desk", "pid": 1, "since": 0}, header=False)[0] == 403,
+               "only this computer's own page may ask")
+            code, body = stop_request({"node": "desk", "pid": 1, "since": 0})
+            ok(code == 200 and json.loads(body)["result"] == "refused", "a program the page does not show: refused")
+            ok(stop_request({"node": "desk", "pid": "1", "since": 0})[0] == 400, "a malformed request is refused")
+            # Stopped from this computer's page: TeamCamel looks again at once.
+            local = detached(sys.executable, tmp / "spin.py")
+            started.append(local)
+            time.sleep(1)
+            l_since = tc.describe([local])[local][1]
+            tc._stoppable[(local, l_since)] = {"name": "spin.py", "session": "cliS"}
+            looks = []
+            real_tick = desk.tick
+            desk.tick = lambda write_now=False: looks.append(write_now)
+            try:
+                code, body = stop_request({"node": "desk", "pid": local, "since": l_since})
+            finally:
+                desk.tick = real_tick
+            ok(code == 200 and json.loads(body)["result"] == "stopped" and looks == [True] and not running(local),
+               "stopped from the page: TeamCamel looks again before answering, so the page shows it at once")
+            ok(desk.merged()["canStop"] is (not REAL["WINDOWS"]), "the page is told this TeamCamel can stop programs")
+        finally:
+            server.shutdown(); server.server_close()
+    finally:
+        tc.STUCK_AFTER, tc.STOP_WAIT = real_after, real_wait
+        for pid in started:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        tc._stoppable.clear(); tc._activity.clear()
+
+    print("starting at login (only if chosen), stopping, the not-running page")
+    restore()
+    home = tmp / "login-home"
+    platform("mac", home)
+    import plistlib
+    calls = []
+    real_run, real_spawn, real_running = tc._run_quiet, tc.spawn_background, tc.is_running
+    tc._run_quiet = lambda cmd: calls.append(cmd) or 0
+    real_ready, real_build = tc.login_item_ready, tc.build_helper_app
+    tc.login_item_ready = lambda since, wait, hint=None, sleep=None: True
+    tc.build_helper_app = lambda: "no compiler here"      # first without the Mac helper app
+    try:
+        mac = plistlib.loads(tc.login_item_text().encode())
+        ok(mac["Label"] == tc.LOGIN_LABEL and mac["ProgramArguments"][1:] == [str(tc.SELF), "--login-item"]
+           and mac["RunAtLoad"] and mac["KeepAlive"] and str(home) in mac["StandardOutPath"],
+           "macOS: a LaunchAgent that starts this copy at login and again if it stops, logging to TeamCamel's log")
+        ok("--port 2299" in " ".join(plistlib.loads(tc.login_item_text(2299).encode())["ProgramArguments"]),
+           "another port carried over")
+        ok(not tc.login_item_installed() and not tc.start_login_item(), "none yet: nothing to wake")
+        ok(tc.install_login_item() and tc.login_item_path() == home / "Library/LaunchAgents" / (tc.LOGIN_LABEL + ".plist")
+           and tc.login_item_installed() and calls[-1][:2] == ["launchctl", "bootstrap"],
+           "added on request: the file in ~/Library/LaunchAgents, loaded at once")
+        calls.clear()
+        ok(tc.start_login_item() and calls == [["launchctl", "kickstart", "gui/%d/%s" % (os.getuid(), tc.LOGIN_LABEL)]],
+           "woken through launchd, not as a second copy")
+        spawned = []
+        tc.spawn_background = lambda args: spawned.append(args)
+        tc.is_running = lambda port: False
+        tc.ensure_running(tc.PORT)
+        ok(not spawned, "the Claude hook wakes the login item instead of starting another copy")
+        tc._run_quiet = lambda cmd: calls.append(cmd) or 1
+        tc.ensure_running(tc.PORT)
+        ok(spawned == [["--port", str(tc.PORT)]], "if launchd will not, the hook starts TeamCamel the usual way")
+        tc._run_quiet = lambda cmd: calls.append(cmd) or 0
+        calls.clear()
+        ok(tc.remove_login_item() and not tc.login_item_path().exists() and ["launchctl", "bootout",
+           "gui/%d/%s" % (os.getuid(), tc.LOGIN_LABEL)] in calls, "taken away again on request")
+        # One that cannot start (macOS keeps background jobs out of cloud-storage folders) is taken away again.
+        tc.login_item_ready = lambda since, wait, hint=None, sleep=None: False
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            added = tc.install_login_item()
+        ok(not added and not tc.login_item_path().exists() and "taken away again" in out.getvalue()
+           and "log may say why" in out.getvalue(),
+           "a login item that cannot start TeamCamel is taken away at once, with why, and nothing else changes")
+        tc.login_item_ready = lambda since, wait, hint=None, sleep=None: True
+        platform("linux", home)
+        unit = tc.login_item_text()
+        ok("ExecStart=" in unit and '"%s" --login-item' % tc.SELF in unit and "Restart=always" in unit
+           and tc.login_item_path() == home / ".config/systemd/user/teamcamel.service", "Linux: a systemd user service")
+        calls.clear()
+        tc.install_login_item()
+        ok(["systemctl", "--user", "enable", "--now", "teamcamel.service"] in calls, "enabled and started for this user")
+        tc.remove_login_item()
+        platform("win", home)
+        ok(tc.login_item_text().startswith("@echo off") and "--ensure" in tc.login_item_text()
+           and tc.login_item_path().parts[-2:] == ("Startup", "TeamCamel.cmd"), "Windows: a file in the Startup folder")
+        platform("mac", home)
+        waits = []
+        answers = iter([True, True, False])
+        tc.is_running = lambda port: next(answers)
+        tc.wait_for_port(tc.PORT, sleep=waits.append)
+        ok(waits == [tc.LOGIN_WAIT, tc.LOGIN_WAIT], "the login item's copy stands by while another one shows the page")
+        # --install-hook does not add it: starting by itself after a restart is the user's choice.
+        tc.is_running = lambda port: True
+        real_ensure = tc.ensure_running
+        tc.ensure_running = lambda port: None
+        out = io.StringIO()
+        real_argv = sys.argv
+        sys.argv = ["teamcamel.py", "--install-hook"]
+        try:
+            with contextlib.redirect_stdout(out):
+                tc.main()
+        finally:
+            sys.argv, tc.ensure_running = real_argv, real_ensure
+        ok(not tc.login_item_installed() and "--start-at-login" in out.getvalue() and str(tc.login_item_path()) in out.getvalue(),
+           "--install-hook adds no login item; it says what one would add, and where, for those who want it")
+        # Asked for while a copy runs: nothing is stopped; the login item's copy stands by.
+        tc.is_running = lambda port: True
+        stopped = []
+        real_stop = tc.stop
+        tc.stop = lambda port, why="": stopped.append(why) or True
+        sys.argv = ["teamcamel.py", "--start-at-login"]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                tc.main()
+        finally:
+            sys.argv, tc.stop = real_argv, real_stop
+        ok(tc.login_item_installed() and not stopped, "--start-at-login stops nothing: the running copy keeps the page")
+        tc.remove_login_item(quiet=True)
+    finally:
+        tc._run_quiet, tc.spawn_background, tc.is_running = real_run, real_spawn, real_running
+        tc.login_item_ready, tc.build_helper_app = real_ready, real_build
+
+    print("the Mac helper app the login item starts (a script started at login may not open cloud folders)")
+    restore()
+    home = tmp / "helper-home"
+    platform("mac", home)
+    real_self = tc.SELF
+    try:
+        for where, expect in (("Library/CloudStorage/Dropbox-Personal/x/teamcamel.py", ("files managed by Dropbox", "FileProviderDomain")),
+                              ("Library/CloudStorage/GoogleDrive-me@example.com/teamcamel.py", ("files managed by Google Drive", "FileProviderDomain")),
+                              ("Library/Mobile Documents/com~apple~CloudDocs/teamcamel.py", ("files managed by iCloud Drive", "FileProviderDomain")),
+                              ("Documents/tc/teamcamel.py", ("files in your Documents folder", "SystemPolicyDocumentsFolder")),
+                              ("Desktop/teamcamel.py", ("files in your Desktop folder", "SystemPolicyDesktopFolder")),
+                              ("code/teamcamel.py", None)):
+            tc.SELF = home / where
+            place = tc.protected_place()
+            ok((place[:2] if place else None) == expect, "macOS guards %s: %s" % (where.split("/")[0] + "/...", expect[0] if expect else "no"))
+        tc.SELF = home / "Library/CloudStorage/Dropbox-Personal/tc/teamcamel.py"
+        info = tc.helper_info()
+        ok(info["CFBundleIdentifier"] == tc.LOGIN_LABEL and info["LSUIElement"] and info["TeamCamelScript"] == str(tc.SELF)
+           and "NSFileProviderDomainUsageDescription" in info and "Contents/Resources/helper.c" in info["TeamCamelNote"],
+           "its Info.plist: a background app named TeamCamel, the one script it starts, and the reason macOS shows")
+        tc.SELF = home / "code/teamcamel.py"
+        ok(not any(k.endswith("UsageDescription") for k in tc.helper_info()), "no reason to give where macOS asks nothing")
+        mac = plistlib.loads(tc.login_item_text(2299, helper=True).encode())
+        ok(mac["ProgramArguments"] == [str(tc.helper_program()), "--port", "2299"] and mac["AssociatedBundleIdentifiers"] == [tc.LOGIN_LABEL]
+           and str(tc.SELF) not in tc.login_item_text(helper=True),
+           "the LaunchAgent starts the helper app (which names the script), shown as TeamCamel")
+        # Whose login item: told by the script the helper app starts.
+        contents = tc.helper_app() / "Contents"
+        (contents / "Resources").mkdir(parents=True)
+        (contents / "Info.plist").write_bytes(plistlib.dumps(tc.helper_info()))
+        tc.login_item_path().parent.mkdir(parents=True)
+        tc.login_item_path().write_text(tc.login_item_text(helper=True))
+        ok(tc.helper_script() == str(tc.SELF) and tc.login_item_uses_helper() and tc.login_item_installed(),
+           "a login item through the helper app counts as this copy's")
+        tc.SELF = home / "other/teamcamel.py"
+        ok(not tc.login_item_installed() and not tc.remove_helper_app() and tc.helper_app().exists(),
+           "another copy's helper app is neither counted nor taken away")
+        tc.SELF = home / "code/teamcamel.py"
+        real_run = tc._run_quiet
+        tc._run_quiet = lambda cmd: 0
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                ok(tc.remove_login_item(), "taken away on request")
+        finally:
+            tc._run_quiet = real_run
+        ok(not tc.login_item_path().exists() and not tc.helper_app().exists() and not tc.helper_app().parent.exists()
+           and "Helper app removed" in out.getvalue(), "with its helper app, and the folder it was in")
+        # Started? Its copy says so in a small file next to the log.
+        since = tc.now_ms()
+        ok(not tc.login_item_ready(since, 0), "not started yet")
+        tc.note_login_item_started()
+        ok(tc.login_item_ready(since, 0) and not tc.login_item_ready(tc.now_ms() + 1000, 0),
+           "started: said by the login item's copy itself, counted only if after the request")
+        tc.login_ready_path().unlink()
+        out, waits = io.StringIO(), []
+        with contextlib.redirect_stdout(out):
+            gave = tc.login_item_ready(since, 6, hint="click Allow", sleep=waits.append)
+        ok(not gave and len(waits) == 6 and out.getvalue().count("click Allow") == 1, "waits, and says once what to click")
+        # Asked, and not allowed: taken away again, with how to be asked again.
+        tc.SELF = home / "Library/CloudStorage/Dropbox-Personal/tc/teamcamel.py"
+        real = (tc.build_helper_app, tc.login_item_ready, tc._run_quiet)
+        built, hints = [], []
+        def fake_build():
+            contents.mkdir(parents=True, exist_ok=True)
+            (contents / "Info.plist").write_bytes(plistlib.dumps(tc.helper_info()))
+            built.append(1)
+        tc.build_helper_app = fake_build
+        tc.login_item_ready = lambda since, wait, hint=None, sleep=None: hints.append((wait, hint)) and False
+        tc._run_quiet = lambda cmd: 0
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                added = tc.install_login_item()
+        finally:
+            tc.build_helper_app, tc.login_item_ready, tc._run_quiet = real
+        said = out.getvalue()
+        ok(built and str(tc.helper_app()) in said and str(tc.login_item_path()) in said and "starts this teamcamel.py and nothing else" in said,
+           "it says first what it adds, and where")
+        ok(hints and hints[0][0] == tc.LOGIN_ALLOW_WAIT and "files managed by Dropbox" in hints[0][1] and "Click Allow" in hints[0][1],
+           "it waits for the answer to macOS's question, and says what to click")
+        ok(not added and not tc.login_item_path().exists() and not tc.helper_app().exists()
+           and "tccutil reset FileProviderDomain %s" % tc.LOGIN_LABEL in said,
+           "not allowed: login item and helper app taken away again, with how to be asked again")
+        # The real thing, built and run here (not through launchd).
+        if REAL["MACOS"] and subprocess.run(["xcode-select", "-p"], capture_output=True).returncode == 0:
+            fake = tmp / "fake-tc"; fake.mkdir()
+            tc.SELF = fake / "teamcamel.py"
+            tc.SELF.write_text("import json, os, signal, sys, time\n"
+                               "def bye(s, f):\n    open(sys.argv[0] + '.seen', 'a').write(json.dumps(['stop', s]) + '\\n'); sys.exit(0)\n"
+                               "signal.signal(signal.SIGTERM, bye)\n"
+                               "open(sys.argv[0] + '.seen', 'a').write(json.dumps([sys.argv[1:], os.getppid()]) + '\\n')\n"
+                               "time.sleep(30)\n")
+            ok(tc.build_helper_app() is None and tc.helper_script() == str(tc.SELF), "built on this Mac")
+            sig = lambda: [l for l in subprocess.run(["codesign", "-dvvv", str(tc.helper_app())], capture_output=True,
+                                                     text=True).stderr.splitlines() if l.startswith(("CDHash=", "Signature="))]
+            first = sig()
+            ok("Signature=adhoc" in first and subprocess.run(["codesign", "--verify", "--strict", str(tc.helper_app())]).returncode == 0,
+               "signed on this Mac, and intact")
+            stamp = tc.helper_program().stat().st_mtime_ns
+            ok(tc.build_helper_app() is None and tc.helper_program().stat().st_mtime_ns == stamp, "left as it is when nothing changed")
+            shutil.rmtree(str(tc.helper_app()))
+            ok(tc.build_helper_app() is None and sig() == first, "built again: the very same app, so macOS's permission still fits")
+            proc = subprocess.Popen([str(tc.helper_program()), "--port", "47392"])
+            deadline = time.time() + 10
+            seen = Path(str(tc.SELF) + ".seen")
+            while time.time() < deadline and not seen.exists():
+                time.sleep(0.1)
+            proc.terminate()
+            code = proc.wait(timeout=10)
+            lines = [json.loads(l) for l in seen.read_text().splitlines()]
+            ok(lines[0] == [["--login-item", "--port", "47392"], proc.pid] and lines[1] == ["stop", 15] and code == 0,
+               "it starts that script as its child, with --login-item and the port, and passes a stop on")
+            tc.remove_helper_app()
+    finally:
+        tc.SELF = real_self
+        restore()
+
+    # The last word: why it stopped, in its report.
+    tc._note_stop("stopped with --stop")
+    ok(tc._stop_reason() == "stopped with --stop" and tc._stop_reason() is None, "a stop says why, once")
+    tc._stop_note_path().write_text(json.dumps({"why": "old", "at": now - 300000}))
+    ok(tc._stop_reason() is None, "an old note does not count")
+    tc.STATE = tmp / "login-state"; tc.STATE.mkdir()
+    node = tc.Node()
+    node.goodbye("shutting down, restarting or logging out")
+    last = json.loads(tc.state_file(node.name).read_text())
+    ok(last["stopped"]["why"] == "shutting down, restarting or logging out" and "sessions" in last,
+       "the last report says it stopped, and why, with the sessions as last seen")
+    # For real: a running copy stopped by the system, and one stopped with --stop.
+    if not REAL["WINDOWS"]:
+        demo = tmp / "sig"; (demo / "web").mkdir(parents=True)
+        shutil.copy2(str(REAL["SELF"]), str(demo / "teamcamel.py"))
+        (demo / "web" / "index.html").write_text("<html></html>\n")
+        dhome = tmp / "sig-home"; (dhome / ".claude").mkdir(parents=True)
+        (dhome / ".claude" / "nodename").write_text("sigtest\n")
+        env = dict({k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}, HOME=str(dhome))
+        env.pop("XDG_STATE_HOME", None); env.pop("XDG_CONFIG_HOME", None)
+        for note, expect in ((None, "shutting down, restarting or logging out"), ("stopped with --stop", "stopped with --stop")):
+            proc = subprocess.Popen([sys.executable, str(demo / "teamcamel.py"), "--port", "47391"], env=env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            deadline = time.time() + 20
+            while time.time() < deadline and not tc.is_running(47391):
+                time.sleep(0.3)
+            if note:
+                logs = dhome / ("Library/Logs" if REAL["MACOS"] else ".local/state/teamcamel")
+                logs.mkdir(parents=True, exist_ok=True)
+                (logs / "teamcamel.stopping").write_text(json.dumps({"why": note, "at": tc.now_ms()}))
+            proc.terminate(); proc.wait(timeout=10)
+            report = json.loads((demo / "state" / "sigtest.json").read_text())
+            ok(report.get("stopped", {}).get("why") == expect, "stopped for real (%s): its last report says so" % expect)
+    # The page shown when TeamCamel does not answer.
+    sw = tc.service_worker()
+    shown = json.loads(sw.split("const PAGE = ", 1)[1].split(";\nself.addEventListener", 1)[0])
+    ok("respondWith" in sw and "navigate" in sw and json.dumps(tc.start_command()) in shown
+       and "TeamCamel is not running on this computer" in shown and str(tc.SELF) in tc.start_command(),
+       "a helper for the browser that shows 'not running', with the command to start it, when TeamCamel does not answer")
+    if shutil.which("node"):
+        (tmp / "sw.js").write_text(sw)
+        ok(subprocess.run(["node", "--check", str(tmp / "sw.js")], capture_output=True).returncode == 0, "the helper is valid JavaScript")
+    restore()
+
+    print("two folders with the same name are two workspaces")
+    cases = tmp / "same-name"
+    for d in ("_Kian/workspace", "_Grinberg/workspace", "a/x/deep/workspace", "b/x/deep/workspace", "side/wp-abc", "side/abc", "solo/wp-one"):
+        (cases / d).mkdir(parents=True)
+    (cases / "link-to-kian").symlink_to(cases / "_Kian")
+    def ws_of(dirs):
+        ss = [{"id": str(i), "ws": tc.ws_name(d), "_dir": d} for i, d in enumerate(dirs)]
+        tc.tell_workspaces_apart(ss)
+        return [s["ws"] for s in ss]
+    k, g = str(cases / "_Kian/workspace"), str(cases / "_Grinberg/workspace")
+    ok(ws_of([k, g, k]) == ["_Kian/workspace", "_Grinberg/workspace", "_Kian/workspace"],
+       "two cases each in a folder 'workspace': each label names the folder it sits in")
+    ok(ws_of([k, str(cases / "link-to-kian/workspace"), k + "/.claude/worktrees/fix"]) == ["workspace"] * 3,
+       "the same folder reached through a link, or from a worktree in it, stays one workspace, named as before")
+    ok(ws_of([str(cases / "a/x/deep/workspace"), str(cases / "b/x/deep/workspace")]) == ["a/x/deep/workspace", "b/x/deep/workspace"],
+       "going further up only as far as needed to tell them apart")
+    ok(ws_of([str(cases / "side/wp-abc"), str(cases / "side/abc")]) == ["side/wp-abc", "side/abc"],
+       "wp-abc and abc side by side: their own names tell them apart")
+    ok(ws_of([str(cases / "solo/wp-one"), None]) == ["one", "(no folder)"], "a name used once is left as it was")
+    ss = [{"id": "1", "ws": "workspace", "_dir": k}]
+    tc.tell_workspaces_apart(ss)
+    ok(ss == [{"id": "1", "ws": "workspace"}], "the folder itself is not passed on in the report")
+
     print("versions of Claude Code and Codex")
     restore()
     home = tmp / "ver-home"
@@ -737,7 +1253,8 @@ try:
     if REAL["MACOS"]:
         ok(tc.follow_folder(old, {}) == (None, renamed), "folder renamed: followed to its new name, nothing to say")
         e = tc.with_folder({"ws": "alpha", "attention": True}, old, {})
-        ok(e == {"ws": "alpha-2026", "attention": True}, "the session carries on under the new name, state unchanged")
+        ok(e == {"ws": "alpha-2026", "attention": True, "_dir": renamed},
+           "the session carries on under the new name, state unchanged (its new folder noted for the labels)")
         (tmp / "elsewhere").mkdir()
         (tmp / "wp-alpha-2026").rename(tmp / "elsewhere" / "wp-alpha-2026")
         moved = os.path.realpath(str(tmp / "elsewhere" / "wp-alpha-2026"))
@@ -756,9 +1273,9 @@ try:
     ok(tc._in_trash("/Users/x/.Trash/proj") and tc._in_trash("/Volumes/Disk/.Trashes/501/proj")
        and not tc._in_trash("/Users/x/work/proj"), "the Trash told from other places")
     e = tc.with_folder({"attention": True}, str(tmp / "never-seen"), {})
-    ok(e == {"attention": True, "folder": "missing"}, "folder not found: noted, still needing you")
+    ok(e == {"attention": True, "folder": "missing", "_dir": str(tmp / "never-seen")}, "folder not found: noted, still needing you")
     seen = {str(tmp / "gone"): ("deleted", str(tmp / "gone"))}
-    ok(tc.with_folder({"attention": True}, str(tmp / "gone"), seen) == {"attention": False, "folder": "deleted"},
+    ok(tc.with_folder({"attention": True}, str(tmp / "gone"), seen) == {"attention": False, "folder": "deleted", "_dir": str(tmp / "gone")},
        "folder deleted: no longer needing you")
     tc._folders = None
     write(tc.folder_ids_path(), {"/old/style": [1, 2]})        # as 2.4 kept them
@@ -850,7 +1367,8 @@ try:
                                    "title": "Long upload", "cwd": "/u/wp-photos", "lastActivityAt": now - 60000})
     transcript(home / ".claude/projects/p1" / "cliU-new.jsonl", done)
     real_bw = tc.background_work
-    tc.background_work = lambda registry, desktop=None: {"cliU-old": ("in background (rclone)", now - 3600000)}
+    tc.background_work = lambda registry, desktop=None: {"cliU-old": {"detail": "in background (rclone)", "since": now - 3600000,
+                                                                      "stuck": [], "programs": []}}
     try:
         u_got = {s["title"]: s for s in tc.collect()}["Long upload"]
     finally:
@@ -962,10 +1480,39 @@ try:
        "hints are the page's own, shown at once, not the browser's delayed ones")
     ok("'Mark if handled'" in html and "tips: true," in html and "function tip(" in html and "'Legend: the colors of the statuses'" in html,
        "an empty square to mark a session handled; help messages, which the settings can turn off")
+    real_web = tc.WEB
+    tc.WEB = tmp / "half-web"; tc.WEB.mkdir()
+    try:
+        (tc.WEB / "index.html").write_text("<html><body>first</body></html>\n")
+        first, stamp = tc.page_body(), tc.page_stamp()
+        time.sleep(0.05)
+        (tc.WEB / "index.html").write_text("<html><body>second, still being writ")
+        ok(tc.page_body() == first and tc.page_stamp() == stamp,
+           "a page file caught half-written by the shared folder: the last whole copy is served, and no reload is asked")
+        time.sleep(0.05)
+        (tc.WEB / "index.html").write_text("<html><body>second</body></html>\n")
+        ok(b"second" in tc.page_body() and tc.page_stamp() != stamp, "once it is whole: the new page, and open pages reload")
+    finally:
+        tc.WEB = real_web
+    ok("register('/teamcamel-sw.js')" in html and "teamcamel.lastSeen" in html and "'[TeamCamel stopped '" in html,
+       "the page keeps the not-running helper, and shows another computer's last word when it stopped")
+    ok("Mark handled anyway" in html and "Stop it instead" in html and "s.state === 'stuck' && !s.handled" in html,
+       "marking a session that may be stuck handled asks first: it does not stop the program")
+    ok("await refresh(); else render();" in html and "quick = setTimeout" in html,
+       "after a stop the page fetches the new status at once; while another computer is asked, every few seconds")
+    ok("function askStop" in html and "'/api/stop'" in html and "may be stuck" in html and "stopFromOthers: false" in html,
+       "the page names stuck programs and can ask to stop one")
     ok("function markHandled" in html and "archived: true," in html and "'/api/handled'" in html,
        "the page can mark a session handled and shows archived sessions in grey")
     ok("function updateArrows" in html and "othersColumn" not in html and ".nodes > .node { flex: 1 0 320px" in html,
        "one column per computer, with arrows to sessions out of view")
+    ok("r.bottom > bottom ? r.bottom - bottom" in html and "(window.innerHeight - r.height) / 2" not in html,
+       "an arrow scrolls only as far as needed, so the sessions in view stay in view")
+    ok(".node:not(.stale) .s.attention:not(.quiet)" in html and ".node:not(.stale) .s.working:not(.quiet)" in html
+       and "col.dataset.node = p.node.node" in html,
+       "arrows only for sessions shown in red or blue, and they name the computer whose column it is in")
+    ok("'@' + cols.indexOf(col)" in html and "Math.max(c.left, left) - 36" in html and ".arrow.up.work, .arrow.down.work" not in html,
+       "each computer's column has its own up and down arrows, just left of it, for its own sessions only")
     ok("refresh: 15," in html and all("[%d, '" % sec in html for sec in tc.REFRESH_CHOICES),
        "the page offers the same refresh intervals as TeamCamel, 15 seconds by default")
 

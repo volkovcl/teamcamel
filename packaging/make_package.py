@@ -45,7 +45,7 @@ CREDIT = re.compile(r'<span id="credit">.*?</span>')
 REPOSITORY = [
     "README.md", "LICENSE.txt", "CHANGELOG.txt", ".gitignore",
     "teamcamel.py", "precheck.sh", "precheck.bat", "web/index.html",
-    "docs/banner.svg", "docs/screenshot.png", "docs/settings.png",
+    "docs/banner.svg", "docs/screenshot.png", "docs/settings.png", "docs/stopping.png",
     "logo/teamcamel-logo.svg", "logo/camel-m.svg", "logo/build_logo.py", "logo/outline.swift",
     "tests/test_teamcamel.py", "tests/linux_fixture.py", "tests/linux_e2e.sh",
     "packaging/make_package.py", "packaging/make_screenshot.py",

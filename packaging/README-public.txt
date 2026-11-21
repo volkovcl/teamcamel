@@ -59,6 +59,22 @@ copy, and tells you when TeamCamel is running.
 
        http://127.0.0.1:2263/
 
+5. Optional, only if you want it: to have TeamCamel also start by itself
+   when you log in (so its page is up after a restart, before any Claude
+   session), and start again if it ever stops, type:
+
+       python3 teamcamel.py --start-at-login
+
+   This adds a login item: on macOS a LaunchAgent in ~/Library/LaunchAgents,
+   on Linux a systemd user service, on Windows a file in the Startup folder.
+   On a Mac the LaunchAgent starts a small helper app that TeamCamel builds
+   there, in ~/Library/Application Support/TeamCamel, from the C source it
+   carries: macOS lets an app, but not a bare script started at login, into
+   a cloud-storage folder such as Dropbox, once you allow it. When the folder
+   is in such a place, macOS asks once whether "TeamCamel" may access it:
+   click Allow. "--no-start-at-login" takes it all away. Nothing starts by
+   itself after a restart unless you ask for this.
+
 
 READING THE PAGE
 
@@ -73,11 +89,18 @@ READING THE PAGE
   program the session started that is still busy, such as a render, a copy
   or an upload. A program started again later, by you or by a script,
   still counts: it belongs to the session whose commands named its script
-  in the last 14 days. It turns to completed when that work ends.
+  in the last 14 days. It turns to completed when that work ends. Point at
+  it to see which program, since when, and its command.
+- "May be stuck" (red) means such a program has used the processor nonstop
+  for an hour while reading, writing and sending nothing. "stop..." next to
+  it stops that program after asking you; only programs TeamCamel shows as
+  a session's work, never anything else. Stopping a program on another of
+  your computers is a setting, off until you turn it on.
 - The number after your computer's name counts the sessions that need you. It
   also shows at the front of the browser tab's title.
 - ". . ." unfolds the older sessions of a workspace. A workspace ("ws") is
-  the folder a session works in.
+  the folder a session works in. Two folders with the same name stay apart:
+  each label then also names the folder it sits in.
 - When you have both Claude and Codex sessions, each one carries a small
   "Claude" or "Codex" label.
 - Click a session's name to open that session in its app. This works for
@@ -92,8 +115,10 @@ READING THE PAGE
   folder's new name; TeamCamel follows the folder (on a Mac).
 - Each computer has its own column. When more sessions or computers are on
   the page than fit the window, small blinking arrows point to those out of
-  view: up and down on the left, left and right at the top. Blue: working
-  sessions that way; red: sessions needing you. Click one to go there.
+  view: up and down just left of each computer's column, for that column's
+  sessions; left and right at the top, for columns out of view. Blue:
+  working sessions that way; red: sessions needing you. Click one to go
+  there.
 - Under each computer's name: the Claude Code and Codex versions it runs.
   Green: the latest. Grey: not the latest. Red: may be outdated, that is
   behind a big version (for Claude Code the first two numbers, such as 2.1;
@@ -138,8 +163,13 @@ Windows).
 
     python3 teamcamel.py --check       what TeamCamel finds on this computer
     python3 teamcamel.py --stop        stop it until the next Claude session
-    python3 teamcamel.py --uninstall   take it out of Claude's start-up and
-                                       stop it; then delete the TeamCamel folder
+                                       (or the next login, with the login item)
+    python3 teamcamel.py --no-start-at-login
+                                       take the login item of step 5 (and the
+                                       Mac helper app) away
+    python3 teamcamel.py --uninstall   take it out of Claude's start-up (and
+                                       the login item) and stop it; then
+                                       delete the TeamCamel folder
 
 
 
@@ -149,7 +179,8 @@ GOOD TO KNOW
   its page to this computer only. It uses no tokens and contacts no online
   service, unless you turn on the daily look-up of the latest versions in
   the settings. The one thing it changes is the start-up line added in step
-  3, which "--uninstall" takes out again.
+  3 (and the login item of step 5, if you chose it), which "--uninstall"
+  takes out again.
 - It shows Claude Code sessions that run on your computers, started from the
   Claude desktop app's Code tab or from a terminal. It does not show cloud
   sessions, ordinary claude.ai chats or Cowork sessions.

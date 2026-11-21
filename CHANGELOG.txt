@@ -4,6 +4,178 @@ TeamCamel change log
 Newest version first.
 
 
+Version 2.9.11 - 2026-11-15
+---------------------------
+
+Fixed
+- Two different folders with the same name, such as two cases each kept in
+  a folder named "workspace", showed as one workspace, their sessions mixed
+  together. Now each is its own workspace, and its label also names the
+  folder it sits in ("_Kian/workspace", "_Grinberg/workspace"), going
+  further up only when that is not enough. The same folder reached through
+  a link, or from a worktree inside it, stays one workspace. Names used
+  once are left as they were. A workspace hidden or moved in the settings
+  under the shared name is to be hidden or moved again under the new one.
+
+Version 2.9.10 - 2026-11-11
+---------------------------
+
+Fixed
+- The up and down arrows sat in the left margin, beside the first
+  computer's column, but spoke of every column: a red arrow beside one
+  computer's column could mean a session waiting in another's (a red arrow
+  up beside the laptop's column, for a session waiting on worker2). Now
+  each computer's column has its own up and down arrows, just left of it,
+  for its own sessions only. The left and right arrows at the top still
+  serve the whole row of columns.
+
+Version 2.9.9 - 2026-11-11
+--------------------------
+
+Fixed
+- Clicking an arrow to a session out of view put that session in the
+  middle of the window, which pushed the sessions near the top out of sight,
+  those in other computers' columns too; new arrows then came up for them
+  (a red one, for instance, for a session awaiting input in the other
+  column). Now the page moves only as far as needed to show the session, so
+  what was in view stays in view where it can.
+- The arrows also counted grey sessions (archived, marked handled, folder
+  deleted) and those in the faded column of a computer that has stopped
+  reporting. Now only sessions shown in red or blue count.
+- An arrow's hint names the computer whose column the session is in.
+
+Version 2.9.8 - 2026-11-10
+--------------------------
+
+New
+- "--start-at-login" now works on a Mac whose TeamCamel folder is inside a
+  cloud-storage folder (Dropbox, OneDrive, Google Drive, iCloud Drive) or in
+  Desktop, Documents or Downloads. macOS lets a job started at login open
+  files there only if it is an app the user has allowed; it turns a bare
+  script away without asking. So on a Mac the login item now starts a small
+  helper app, which TeamCamel builds on that Mac (with Apple's command line
+  tools) from the C source it carries, signs there, and keeps in
+  ~/Library/Application Support/TeamCamel. The app starts teamcamel.py,
+  named in its Info.plist, and nothing else; it passes a stop on. macOS asks
+  once whether "TeamCamel" may access the folder; TeamCamel says so and
+  waits for the answer (up to 10 minutes). Built again later, the app comes
+  out the same, so macOS's answer still holds. Before adding anything, the
+  command says what it adds and where; "--no-start-at-login" and
+  "--uninstall" take the app away with the login item. Without the command
+  line tools, it works as before.
+- Whether the login item's copy has started is now told by that copy itself
+  (a small file next to the log), not by launchd's "running", which a
+  helper app waiting for permission would also show.
+- "--check" says when the login item starts TeamCamel through the helper
+  app.
+
+Version 2.9.7 - 2026-11-07
+--------------------------
+
+Fixed
+- "--start-at-login" stopped the running TeamCamel to let the login item take
+  over, before knowing the login item could run; where it could not, the
+  page stayed down. Now nothing is stopped: the login item's copy stands by
+  and takes over when the running one ends. And it is checked within seconds:
+  a login item that cannot start TeamCamel is taken away again at once, with
+  why. On a Mac this happens when the TeamCamel folder is inside a
+  cloud-storage folder (Dropbox, OneDrive, iCloud Drive), which macOS lets a
+  job started at login open only with a permission it cannot ask for.
+
+
+Version 2.9.6 - 2026-11-07
+--------------------------
+
+New
+- Optional, only if you ask for it: "--start-at-login" makes TeamCamel also
+  start by itself when you log in (on a Mac with FileVault, the moment you
+  unlock it after a restart; nothing of yours runs before that), and start
+  again if it ever stops. It adds a login item: on macOS a LaunchAgent in
+  ~/Library/LaunchAgents, on Linux a systemd user service, on Windows a file
+  in the Startup folder. "--no-start-at-login" takes it away; "--uninstall"
+  takes it away too. "--install-hook" never adds it, but says what it would
+  add and where. With it in place, the Claude start-up hook wakes the login
+  item rather than starting a second copy, and a copy already running when
+  it starts is left to finish while the login item stands by.
+- A last word when TeamCamel is stopped: by a shutdown, a restart or a log-out
+  (or by --stop, --uninstall), it writes one more report saying so, and the
+  other computers' pages show "TeamCamel stopped at 9:23 PM: shutting down,
+  restarting or logging out" instead of only "not reporting". It reaches
+  them if the shared folder sends it before it closes.
+- When TeamCamel is not running on the computer you are at, the bookmarked
+  page shows "TeamCamel is not running on this computer", when it was last
+  seen running, and the command to start it (with a Copy button), instead
+  of the browser's "cannot connect"; it opens TeamCamel by itself as soon as
+  it answers. The browser keeps this from the last visit. Works in Chrome;
+  other browsers may show their own message instead.
+- --check says whether the login item is there.
+
+
+Version 2.9.5 - 2026-10-28
+--------------------------
+
+Changed
+- Ticking the handled square of a session that may be stuck no longer marks
+  it at once: it says first that this does not stop the program, which keeps
+  running and using the processor, and offers "Mark handled anyway", "Stop it
+  instead..." or "Cancel".
+- After a program is stopped, the page shows the session as it is now at
+  once, instead of after the next refresh (which can be minutes): TeamCamel
+  looks again right away. A computer asked by another to stop a program
+  notices the request within a second rather than at its next look, and
+  reports the outcome straight away; the asking page checks every few
+  seconds until the answer arrives.
+
+Fixed
+- A page could show up half-drawn, without its layout and colors, when the
+  browser loaded it while the shared folder was still writing a new version
+  of it. TeamCamel now serves the page only once the file is whole, and the
+  last whole copy until then.
+
+
+Version 2.9.4 - 2026-10-28
+--------------------------
+
+New
+- "May be stuck": a program a session left running that has used the
+  processor nonstop for an hour while reading, writing and sending nothing
+  shows in red as "may be stuck (its name)" and counts as needing you
+  (notices, the count, the red arrows). A long silent calculation can look
+  the same, hence "may": tick the session handled if it is fine. The quiet
+  time is kept over a restart of TeamCamel, in a small local file.
+- Stopping such a program from the page: "stop…" next to a session working
+  in background, or one that may be stuck, asks first and names the program,
+  when it started and its command line. It stops the program and what it
+  started; one that does not stop when asked can be stopped by force, on a
+  second yes. Only programs TeamCamel itself shows as a session's work are
+  ever stopped, matched by number and start time, and never Claude, Claude
+  Code or TeamCamel. Every stop is written to TeamCamel's log.
+- From another computer: a setting, "Let my other computers' pages stop a
+  session's program here", off until turned on. The request goes through
+  the shared folder; that computer's TeamCamel checks it against its own
+  list and its own settings, and reports the outcome within about a minute.
+- Pointing at "working in background" or "may be stuck" shows each program:
+  its name, processor use, how long it has been quiet, when it started and
+  its command line.
+
+Changed
+- A program running a script is named by the script: "qa3_billscan.py"
+  rather than "Python", "run_uploads.sh" rather than "bash".
+- A copy of TeamCamel itself is never counted as a session's program.
+
+
+Version 2.9.3 - 2026-10-25
+--------------------------
+
+Fixed
+- A session whose command quit the Claude app and opened it again showed as
+  "working in background (Claude, Claude Helper)" for as long as the app
+  ran: the reopened app, and everything it starts, carry that session's
+  mark. The Claude app's own programs, and what they start, no longer count
+  as a session's work. Commands of the Claude Code sessions running inside
+  the app still count for their own sessions.
+
+
 Version 2.9.2 - 2026-10-23
 --------------------------
 

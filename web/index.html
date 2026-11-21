@@ -42,15 +42,14 @@
   }
   .nodes > .node { flex: 1 0 320px; min-width: 0; scroll-snap-align: start; }
 
-  /* Arrows to sessions out of view: blue, working; red, needing you. Up and down in the left
-     gutter, side by side; left and right at the top, one above the other. */
+  /* Arrows to sessions out of view: blue, working; red, needing you. Up and down side by side
+     just left of the column they belong to (each computer's column has its own, placed by the
+     script); left and right at the top, one above the other. */
   .arrow { position: fixed; z-index: 5; width: 14px; height: 14px; padding: 0; border: 0; background: none;
            cursor: pointer; animation: pulse 2s ease-in-out infinite; }
   .arrow svg { display: block; width: 14px; height: 14px; fill: currentColor; }
   .arrow.work { color: var(--work); }
   .arrow.attn { color: var(--attn); }
-  .arrow.up.work, .arrow.down.work { left: 4px; }
-  .arrow.up.attn, .arrow.down.attn { left: 19px; }
   .arrow.up { top: 70px; }
   .arrow.down { bottom: 46px; }
   .arrow.left { left: 62px; }
@@ -82,8 +81,21 @@
   .name { display: block; color: inherit; text-decoration: none; }
   a.name:hover { text-decoration: underline; }
   .status { color: var(--muted); }
-  .s.input .status, .s.interrupted.attention .status { color: var(--attn); }
+  .s.input .status, .s.interrupted.attention .status, .s.stuck .status { color: var(--attn); }
   .s.working .status { color: var(--work); }
+  /* Stopping a program a session left running. */
+  .stop { font: inherit; font-size: 13px; line-height: 1; background: none; border: 1px solid var(--rule); border-radius: 4px;
+          padding: 1px 6px; margin-left: 8px; color: var(--muted); cursor: pointer; vertical-align: 1px; }
+  .stop:hover, .stop:focus-visible { color: var(--ink); border-color: var(--muted); }
+  .stopbox { margin: 6px 0 2px; padding: 8px 12px 10px; max-width: 620px; background: #fff; color: #15180E;
+             border: 1px solid var(--rule); border-radius: 6px; font-size: 14px; font-weight: 400; }
+  .stopbox .what { font-weight: 500; margin-top: 4px; }
+  .stopbox .note { color: #586050; font-size: 13px; margin: 2px 0; }
+  .stopbox code { display: block; font: 12px ui-monospace, Menlo, Consolas, monospace; color: #586050; margin: 2px 0 4px;
+                  overflow-wrap: anywhere; }
+  .stopbox button { font: inherit; font-size: 13px; background: none; border: 1px solid #586050; border-radius: 4px;
+                    padding: 2px 10px; margin: 6px 8px 0 0; color: #15180E; cursor: pointer; }
+  .stopbox button.go { background: #F7C1C1; border-color: #A32D2D; color: #501313; }
 
   .more {
     font: inherit; font-size: 22px; font-weight: 500; line-height: 1; color: var(--muted);
@@ -111,7 +123,7 @@
   .chip.old { background: #F7C1C1; color: #501313; }
 
   /* A hint next to whatever the pointer rests on. */
-  .hint { position: fixed; z-index: 30; max-width: 300px; padding: 4px 8px; border-radius: 4px; background: var(--ink);
+  .hint { position: fixed; z-index: 30; max-width: 300px; white-space: pre-line; overflow-wrap: anywhere; padding: 4px 8px; border-radius: 4px; background: var(--ink);
           color: var(--bg); font-size: 13px; font-weight: 400; line-height: 1.35; pointer-events: none;
           box-shadow: 0 2px 8px rgba(0, 0, 0, .2); }
 
@@ -171,8 +183,9 @@
 const STALE_FACTOR = 2.4;   // a node is "not reporting" after this many missed heartbeats
 // Grey and never needing you: archived, marked handled, or its folder deleted.
 const quiet = s => Boolean(s.archived || s.handled || s.folder === 'deleted');
-const RANK = s => quiet(s) ? 3 : s.state === 'input' ? 0 : (s.state === 'interrupted' && s.attention) ? 1
-                : s.state === 'working' ? 2 : 3;
+const RANK = s => quiet(s) ? 3 : s.state === 'input' ? 0
+                : ((s.state === 'interrupted' || s.state === 'stuck') && s.attention) ? 1
+                : (s.state === 'working' || s.state === 'stuck') ? 2 : 3;
 const FOLDER_WORDS = { deleted: 'folder deleted', missing: 'folder not found' };   // a moved folder is simply followed
 
 let data = null, failed = false, timer = null, pollMs = 15000, pageStamp = null;
@@ -217,6 +230,8 @@ function statusText(s, now) {
     return 'awaits input' + what + (t ? '  · ' + t : '');
   }
   if (s.state === 'working') return 'working' + (s.detail ? ' ' + s.detail : '') + (t ? '  · ' + t : '');   // e.g. in background (blender)
+  // Busy on the processor nonstop while reading, writing and sending nothing for an hour or more.
+  if (s.state === 'stuck') return 'may be stuck' + (s.detail ? ' (' + s.detail + ')' : '') + (t ? '  · ' + t : '');
   if (s.state === 'interrupted') return (s.detail || 'interrupted') + (t ? '  · ' + t + ' ago' : '');
   if (s.archived) return 'archived' + (t ? '  · ' + t + ' ago' : '');
   return 'completed' + (t ? '  · ' + t + ' ago' : '');
@@ -244,10 +259,120 @@ function sessionEl(s, p, now) {
     b.type = 'button';
     if (!s.handled) b.setAttribute('aria-label', 'Mark if handled');
     tip(b, s.handled ? 'Not handled after all: it needs you again' : 'Mark if handled');
-    b.addEventListener('click', () => markHandled(p.node.node, s.id, s.handled ? null : s.since));
+    // A program that may be stuck keeps running when its session is marked handled: say so first.
+    b.addEventListener('click', () => {
+      if (s.state === 'stuck' && !s.handled) { stopping.set(p.node.node + '/' + s.id, { phase: 'handle' }); render(); }
+      else markHandled(p.node.node, s.id, s.handled ? null : s.since);
+    });
     status.append(b);
   }
+  // The programs that keep it working: named when pointed at, and one of them can be stopped.
+  if (s.programs && s.programs.length) {
+    info(status, s.programs.map(g => programText(g, now)).join('\n\n'));
+    const key = p.node.node + '/' + s.id;
+    if (canStop(p) && !stopping.has(key)) {
+      const b = el('button', 'stop', 'stop…');
+      b.type = 'button';
+      tip(b, 'Stop a program this session left running');
+      b.addEventListener('click', () => { stopping.set(key, { phase: 'ask' }); render(); });
+      status.append(b);
+    }
+  }
   box.append(name, status);
+  const sb = stopBox(s, p);
+  if (sb) box.append(sb);
+  return box;
+}
+
+// ---- Stopping a program a session left running ---------------------------------------------
+// Only the programs TeamCamel lists as a session's work, matched by number and start time. On this
+// computer TeamCamel stops it at once; on another one, that computer's TeamCamel does, through the
+// shared folder, when its settings allow it.
+
+const stopping = new Map();   // node/session -> { phase: ask | busy | running | sent | done, prog, words, id, at }
+
+function canStop(p) {
+  return Boolean(data.canStop) && !p.stale && (p.local || Boolean(p.node.stopFromOthers));
+}
+
+function when(ms) {
+  return new Date(ms).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function programText(g, now) {
+  const doing = g.stuck ? 'processor ' + g.cpu + '% nonstop; nothing read, written or sent for ' + age((g.quietSec || 0) * 1000)
+                        : 'processor ' + g.cpu + '%';
+  return g.name + ': ' + doing + '; started ' + when(g.since) + (g.cmd ? '\n' + g.cmd : '');
+}
+
+async function askStop(p, s, g, force) {
+  const key = p.node.node + '/' + s.id, where = p.node.node;
+  stopping.set(key, { phase: 'busy', prog: g, words: (force ? 'Stopping ' : 'Asking ') + g.name + ' to stop…' });
+  render();
+  let res;
+  try {
+    const r = await fetch('/api/stop', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TeamCamel': '1' },
+                                         body: JSON.stringify({ node: where, pid: g.pid, since: g.since, force: Boolean(force) }) });
+    res = r.ok ? await r.json() : { result: 'refused', words: 'TeamCamel refused: ' + (await r.text()) };
+  } catch (e) { res = { result: 'refused', words: 'TeamCamel is not answering on this computer' }; }
+  if (res.result === 'sent') stopping.set(key, { phase: 'sent', prog: g, id: res.id, node: where, at: Date.now() });
+  else stopping.set(key, { phase: res.result === 'running' ? 'running' : 'done', prog: g, words: res.words });
+  // TeamCamel has already looked again: show the session as it is now, not at the next refresh.
+  if (res.result === 'stopped' || res.result === 'gone') await refresh(); else render();
+}
+
+let quick = null;   // while another computer is asked to stop a program: look every few seconds
+
+// A request sent to another computer: its answer comes in that computer's report.
+function settle(key, st) {
+  if (st.phase !== 'sent') return st;
+  const other = data.nodes.find(n => n.node === st.node);
+  const got = other && other.stops && other.stops[st.id];
+  if (got) st = { phase: got.result === 'running' ? 'running' : 'done', prog: st.prog, words: got.words + ' (on ' + st.node + ')' };
+  else if (Date.now() - st.at > 180000)
+    st = { phase: 'done', prog: st.prog, words: 'No answer from ' + st.node + ' yet: is TeamCamel running there?' };
+  else if (!quick) quick = setTimeout(() => { quick = null; refresh(); }, 3000);
+  stopping.set(key, st);
+  return st;
+}
+
+function stopBox(s, p) {
+  const key = p.node.node + '/' + s.id;
+  if (!stopping.has(key)) return null;
+  const st = settle(key, stopping.get(key));
+  const box = el('div', 'stopbox');
+  const button = (text, cls, fn) => { const b = el('button', cls, text); b.type = 'button'; b.addEventListener('click', fn); return b; };
+  const close = text => button(text, '', () => { stopping.delete(key); render(); });
+  if (st.phase === 'ask') {
+    const progs = s.programs || [];
+    if (!progs.length) { stopping.delete(key); return null; }
+    for (const g of progs) {
+      box.append(el('div', 'what', 'Stop ' + g.name + ' on ' + p.node.node + '?'),
+                 el('div', 'note', (g.stuck ? 'May be stuck: ' : '') + programText(g, Date.now()).split('\n')[0].replace(g.name + ': ', '')));
+      if (g.cmd) box.append(el('code', '', g.cmd));
+      box.append(button('Stop it', 'go', () => askStop(p, s, g, false)));
+    }
+    box.append(close('Cancel'));
+    if (!p.local) box.append(el('div', 'note', 'Sent to ' + p.node.node + ' through the shared folder; it answers within about a minute.'));
+  } else if (st.phase === 'handle') {
+    const names = (s.programs || []).filter(g => g.stuck).map(g => g.name).join(', ') || s.detail || 'its program';
+    box.append(el('div', 'what', 'Marking it handled does not stop ' + names + '.'),
+               el('div', 'note', 'It keeps running and using the processor; the session only turns grey and stops ' +
+                                 'counting as needing you.'),
+               button('Mark handled anyway', '', () => { stopping.delete(key); markHandled(p.node.node, s.id, s.since); }));
+    if (canStop(p) && (s.programs || []).length)
+      box.append(button('Stop it instead…', 'go', () => { stopping.set(key, { phase: 'ask' }); render(); }));
+    box.append(close('Cancel'));
+  } else if (st.phase === 'busy' || st.phase === 'sent') {
+    box.append(el('div', 'note', st.phase === 'busy' ? st.words
+      : 'Asked ' + st.node + ' to stop ' + st.prog.name + '; waiting for its answer (about a minute)…'));
+  } else if (st.phase === 'running') {
+    box.append(el('div', 'what', st.words + '.'),
+               el('div', 'note', 'It did not stop when asked. Stopping it by force ends it at once, without letting it finish anything.'),
+               button('Stop by force', 'go', () => askStop(p, s, st.prog, true)), close('Leave it'));
+  } else {
+    box.append(el('div', 'what', st.words + '.'), close('OK'));
+  }
   return box;
 }
 
@@ -323,7 +448,8 @@ function byUrgency(a, b) {
 
 function prep(node, now) {
   const local = node.node === data.self;
-  const stale = !local && now - node.generatedAt > data.heartbeatSec * 1000 * STALE_FACTOR;
+  // Stopped (its last word: a shutdown, a restart, a log-out), or silent for too long.
+  const stale = !local && (Boolean(node.stopped) || now - node.generatedAt > data.heartbeatSec * 1000 * STALE_FACTOR);
   // Archived ones only if the settings show them; handled ones no longer need you.
   const marks = data.handled || {};
   const sessions = node.sessions.filter(x => !x.archived || !view || view.archived)
@@ -344,8 +470,12 @@ function about(node) {
 
 function nodeColumn(p, now) {
   const col = el('section', 'node' + (p.stale ? ' stale' : ''));
+  col.dataset.node = p.node.node;
   const h = el('h1', '', 'on ' + p.node.node + ' (' + p.attention + ')');
-  h.append(el('span', 'upd', p.stale
+  const stopped = !p.local && p.node.stopped;
+  h.append(el('span', 'upd', stopped
+    ? '[TeamCamel stopped ' + when(stopped.at) + ': ' + stopped.why + ']'
+    : p.stale
     ? '[not reporting since ' + p.at + ', ' + p.ago + ' ago]'
     : '[updated: ' + p.at + ', ' + p.ago + ' ago]'));
   info(h, about(p.node));
@@ -369,6 +499,7 @@ const DEFAULTS = {
   versions: true, online: false,
   archived: true,                    // sessions archived in Claude or Codex: shown grey (true) or left out
   tips: true,                        // help messages when pointing at things
+  stopFromOthers: false,             // other computers' pages may ask this one to stop a session's program
   refresh: 15,                       // seconds between status reads, on the computers these settings are for
   colors: { bg: '#E6EECF', attn: '#9A2B14', work: '#1553B5', muted: '#586050' },
   notify: { popup: false, sound: false, title: false },
@@ -384,7 +515,7 @@ function complete(s) {
   for (const k of ['order', 'hidden']) if (Array.isArray(s[k])) out[k] = s[k].filter(x => typeof x === 'string');
   for (const k of ['apps', 'systems', 'colors', 'notify'])
     if (s[k] && typeof s[k] === 'object') for (const n in out[k]) if (typeof s[k][n] === typeof out[k][n]) out[k][n] = s[k][n];
-  for (const k of ['versions', 'online', 'archived', 'tips']) if (typeof s[k] === 'boolean') out[k] = s[k];
+  for (const k of ['versions', 'online', 'archived', 'tips', 'stopFromOthers']) if (typeof s[k] === 'boolean') out[k] = s[k];
   if (REFRESH.some(([sec]) => sec === s.refresh)) out.refresh = s.refresh;
   return out;
 }
@@ -675,9 +806,16 @@ function buildPanel() {
     'these settings are for (see the top). Other computers\u2019 statuses come through the shared folder, at most every ' +
     '30 seconds. Faster uses a little more of the computer.'));
 
+  panel.append(el('h3', '', 'Stopping programs'));
+  panel.append(toggle('Let my other computers\u2019 pages stop a session\u2019s program here', s.stopFromOthers,
+                      on => change(t => { t.stopFromOthers = on; })),
+    el('p', 'note', 'A program a session left running can always be stopped from the page on the computer it runs on ' +
+      '("stop…" next to it). With this on, the pages on your other computers can ask too, through the shared folder. ' +
+      '"Here" means the computers these settings are for (see the top).'));
+
   panel.append(el('h3', '', 'Colors'));
   const colors = el('div', 'colors');
-  for (const [k, label] of [['bg', 'Background'], ['attn', 'Awaits input and interrupted'], ['work', 'Working'],
+  for (const [k, label] of [['bg', 'Background'], ['attn', 'Needing you: awaits input, interrupted, may be stuck'], ['work', 'Working'],
                              ['muted', 'Completed, and quieter text']]) {
     const box = el('label'), input = el('input');
     input.type = 'color'; input.value = s.colors[k];
@@ -740,7 +878,7 @@ function render() {
   bar.append(gear);
   if (failed) bar.append(el('span', 'err', 'TeamCamel collector is not answering on this computer'));
   const legend = tip(el('span', 'legend'), 'Legend: the colors of the statuses');
-  legend.append(el('span', 'attn', 'awaits input / interrupted'), el('span', 'work', 'working'),
+  legend.append(el('span', 'attn', 'awaits input / interrupted / may be stuck'), el('span', 'work', 'working'),
                 el('span', '', 'completed'));
   bar.append(legend);
   applyColors(s.colors);
@@ -771,21 +909,29 @@ const ARROW_SHAPES = { up: '7,2 13,12 1,12', down: '1,2 13,2 7,12', left: '2,7 1
 const ARROW_WORDS = { up: 'above', down: 'below', left: 'to the left', right: 'to the right' };
 const arrows = {}, targets = {};
 
-function makeArrows() {
-  for (const dir of Object.keys(ARROW_SHAPES)) for (const kind of ['work', 'attn']) {
-    const b = el('button', 'arrow ' + dir + ' ' + kind);
-    b.type = 'button'; b.hidden = true;
-    b.dataset.help = (kind === 'attn' ? 'Sessions needing you ' : 'Working sessions ') + ARROW_WORDS[dir] + ': click to go there';
-    b.setAttribute('aria-label', b.dataset.help);
-    b.innerHTML = '<svg viewBox="0 0 14 14" aria-hidden="true"><polygon points="' + ARROW_SHAPES[dir] + '"/></svg>';
-    b.addEventListener('click', () => goTo(targets[dir + kind]));
-    document.body.append(b);
-    arrows[dir + kind] = b;
-  }
+function arrowButton(key, dir, kind) {
+  if (arrows[key]) return arrows[key];
+  const b = el('button', 'arrow ' + dir + ' ' + kind);
+  b.type = 'button'; b.hidden = true;
+  b.dataset.help = (kind === 'attn' ? 'Sessions needing you ' : 'Working sessions ') + ARROW_WORDS[dir] + ': click to go there';
+  b.setAttribute('aria-label', b.dataset.help);
+  b.innerHTML = '<svg viewBox="0 0 14 14" aria-hidden="true"><polygon points="' + ARROW_SHAPES[dir] + '"/></svg>';
+  b.addEventListener('click', () => goTo(targets[key]));
+  document.body.append(b);
+  return (arrows[key] = b);
 }
 
-// Bring a session into view: its computer's column to the left edge of the row, the session
-// itself to the middle of the window. The page and the row of columns are scrolled separately.
+// Left and right: one pair for the whole row of columns. Up and down: a pair for each computer's
+// column, made when needed, so that an arrow beside a column speaks only of that column.
+function makeArrows() {
+  for (const dir of ['left', 'right']) for (const kind of ['work', 'attn']) arrowButton(dir + kind, dir, kind);
+}
+
+// Bring a session into view: its computer's column to the left edge of the row, and the page
+// only as far as needed to show the session, so that the sessions in view stay in view where
+// they can. (Centering it pushed those near the top out of sight, other columns' too, and new
+// arrows came up for them.) The page and the row of columns are scrolled separately.
+const GOTO_ROOM = 24;          // pixels kept free between the session and the window's edge
 function goTo(t) {
   if (!t) return;
   const main = document.getElementById('nodes'), col = t.closest('section.node');
@@ -793,10 +939,12 @@ function goTo(t) {
   if (c.left < box.left || c.right > box.right)
     main.scrollTo({ left: main.scrollLeft + c.left - box.left, behavior: 'smooth' });
   const r = t.getBoundingClientRect();
-  window.scrollTo({ top: window.scrollY + r.top - (window.innerHeight - r.height) / 2, behavior: 'smooth' });
+  const top = GOTO_ROOM, bottom = window.innerHeight - document.querySelector('.foot').getBoundingClientRect().height - GOTO_ROOM;
+  const dy = r.top < top || r.height > bottom - top ? r.top - top : r.bottom > bottom ? r.bottom - bottom : 0;
+  if (dy) window.scrollTo({ top: window.scrollY + dy, behavior: 'smooth' });
 }
 
-// For each direction and kind, the nearest session out of view, or none.
+// For each direction and kind, the nearest session out of view, or none; up and down per column.
 function updateArrows() {
   const main = document.getElementById('nodes');
   if (!main || !Object.keys(arrows).length) return;
@@ -804,8 +952,11 @@ function updateArrows() {
   const footer = document.querySelector('.foot').getBoundingClientRect().height;
   const box = main.getBoundingClientRect();
   const left = Math.max(box.left, 0), right = Math.min(box.right, vw);
-  const best = {};
-  for (const [kind, sel] of [['work', '.s.working'], ['attn', '.s.attention']]) {
+  const best = {}, cols = [...main.querySelectorAll('section.node')];
+  // Only what the page shows in blue or red: not a grey session (archived, handled, folder
+  // deleted), and nothing in the faded column of a computer that has stopped reporting.
+  for (const [kind, sel] of [['work', '.node:not(.stale) .s.working:not(.quiet)'],
+                             ['attn', '.node:not(.stale) .s.attention:not(.quiet)']]) {
     for (const x of main.querySelectorAll(sel)) {
       const r = x.getBoundingClientRect();
       if (!r.width) continue;                                   // folded away
@@ -815,15 +966,29 @@ function updateArrows() {
       if (cx < left) { dir = 'left'; gap = left - cx; }
       else if (cx > right) { dir = 'right'; gap = cx - right; }
       else if (cy < 0) { dir = 'up'; gap = -cy; }
-      else if (cy > vh - footer) { dir = 'down'; gap = cy - vh; }
-      if (dir && (!best[dir + kind] || gap < best[dir + kind].gap)) best[dir + kind] = { x, gap };
+      else if (cy > vh - footer) { dir = 'down'; gap = cy - (vh - footer); }
+      if (!dir) continue;
+      const col = x.closest('section.node');
+      const key = dir + kind + (dir === 'up' || dir === 'down' ? '@' + cols.indexOf(col) : '');
+      if (!best[key] || gap < best[key].gap) best[key] = { x, gap, dir, kind, col };
     }
   }
+  for (const [key, v] of Object.entries(best)) arrowButton(key, v.dir, v.kind);
   for (const key of Object.keys(arrows)) {
-    targets[key] = best[key] ? best[key].x : null;
-    arrows[key].hidden = !best[key];
-    if (settings().tips) arrows[key].dataset.tip = arrows[key].dataset.help;
-    else delete arrows[key].dataset.tip;
+    const b = arrows[key], v = best[key], x = v ? v.x : null;
+    targets[key] = x;
+    b.hidden = !x;
+    if (v && (v.dir === 'up' || v.dir === 'down')) {
+      // Just left of its column (the first column's are in the page's left margin), blue then red.
+      const c = v.col.getBoundingClientRect();
+      b.style.left = Math.max(3, Math.max(c.left, left) - 36) + (v.kind === 'attn' ? 15 : 0) + 'px';
+    }
+    // Which computer's column the nearest one is in, when there is more than one.
+    const where = x && cols.length > 1 ? v.col.dataset.node : '';
+    const help = b.dataset.help.replace(': click', (where ? ', on ' + where : '') + ': click');
+    b.setAttribute('aria-label', help);
+    if (settings().tips) b.dataset.tip = help;
+    else delete b.dataset.tip;
   }
 }
 
@@ -840,6 +1005,7 @@ async function refresh() {
     if (!r.ok) throw new Error(r.status);
     data = await r.json();
     failed = false;
+    try { localStorage.setItem('teamcamel.lastSeen', String(Date.now())); } catch (e) {}   // for the "not running" page
     // The page file itself changed (edited on any node): load the new one.
     if (pageStamp === null) pageStamp = data.page;
     else if (data.page && data.page !== pageStamp) { location.reload(); return; }
@@ -902,10 +1068,11 @@ const shq = s => "'" + s.replace(/'/g, "'\\''") + "'";      // one shell word, w
 function commands(os, folder) {
   if (os === 'windows') {
     const cd = folder ? 'cd /d "' + folder + '" && ' : '';
-    return { check: null, install: cd + 'python teamcamel.py --install-hook' };
+    return { check: null, install: cd + 'python teamcamel.py --install-hook', login: cd + 'python teamcamel.py --start-at-login' };
   }
   const cd = folder ? 'cd ' + shq(folder) + ' && ' : '';
-  return { check: cd + 'sh precheck.sh', install: cd + 'python3 teamcamel.py --install-hook' };
+  return { check: cd + 'sh precheck.sh', install: cd + 'python3 teamcamel.py --install-hook',
+           login: cd + 'python3 teamcamel.py --start-at-login' };
 }
 
 function guideAddress() {
@@ -1008,6 +1175,17 @@ function guide() {
   g.append(el('p', 'note', 'Another computer: do steps 2 and 3 there too, from the same synced folder. ' +
                            'Each computer then appears on every computer’s page.'));
 
+  g.append(el('h2', '', '5. Optional: start when you log in'));
+  g.append(el('p', '', 'Only if you want it: TeamCamel can also start by itself when you log in, so its page is up ' +
+                       'after a restart before any Claude session, and start again if it ever stops. Paste this and press ' + enter + ':'));
+  g.append(cmdEl(cmds.login));
+  g.append(el('p', 'note', 'This adds a login item to this computer: ' + (os === 'macos'
+    ? 'a LaunchAgent in ~/Library/LaunchAgents, which starts a small helper app that TeamCamel builds in ' +
+      '~/Library/Application Support/TeamCamel (macOS lets an app, but not a bare script started at login, into a ' +
+      'cloud-storage folder such as Dropbox, once you allow it: if macOS asks whether "TeamCamel" may access the folder, click Allow)'
+    : os === 'windows' ? 'a file in the Startup folder' : 'a systemd user service') +
+    '. The same command with --no-start-at-login takes it away. Nothing starts by itself after a restart unless you ask for this.'));
+
   let timer = null, isUp = false;
   const waiting = () => {
     open.replaceChildren('Waiting for TeamCamel to start… Already set up? Open ', link(address));
@@ -1072,6 +1250,9 @@ if (location.protocol === 'file:') {
     schedule();
   });
   refresh().then(schedule);
+  // A helper the browser keeps: when TeamCamel does not answer, it shows a page saying so, with how
+  // to start it, instead of the browser's own "cannot connect" (where the browser allows it).
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/teamcamel-sw.js').catch(() => {});
 }
 </script>
 </body>
